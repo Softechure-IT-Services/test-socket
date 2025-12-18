@@ -1,108 +1,429 @@
 const express = require("express");
-const mongoose = require("mongoose");
-const cors = require("cors");
-const dotenv = require("dotenv");
 const http = require("http");
 const { Server } = require("socket.io");
-const User = require("./models/userModel");
+const cors = require("cors");
+const dotenv = require("dotenv");
+const db = require("./db");
+const channelRoutes = require("./routes/channel");
+const searchRouter = require("./routes/search");
+const threadsRouter = require("./routes/thread");
+const usersRouter = require("./routes/users");
+const authRouter = require("./routes/auth");
+const externalRouter = require("./routes/external");
+const cookieParser = require("cookie-parser");
+const cookie = require("cookie");
+const { verifyOpaqueToken } = require("./utils/tokenAuth");
+
+const { verifyAccessToken } = require("./utils/jwt");
 
 dotenv.config();
 const app = express();
-
-// Middleware
-app.use(cors());
+app.use(cookieParser());
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://192.168.0.113:3000",
+  "http://192.168.0.113:5000",
+  process.env.CLIENT_URL,
+].filter(Boolean);
+app.use(
+  cors({
+    origin: allowedOrigins,
+    credentials: true,
+  })
+);
 app.use(express.json());
 
-// Connect MongoDB
-mongoose
-  .connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ MongoDB Connected"))
-  .catch((err) => console.log("❌ Mongo Error:", err));
-
-// ===========================
-// 🔹 Create HTTP + Socket.IO server
-// ===========================
 const server = http.createServer(app);
+
 const io = new Server(server, {
-  cors: {
-    origin: "*", // or your frontend URL, e.g. "http://localhost:3000"
-    methods: ["GET", "POST"],
-  },
+  cors: { origin: allowedOrigins, methods: ["GET", "POST"], credentials: true },
+  path: "/socket.io",
 });
 
-// ===========================
-// 🔹 Socket.IO Logic
-// ===========================
+
+// io.use((socket, next) => {
+//   try {
+//     console.log("🔌 SOCKET HANDSHAKE HEADERS:", socket.handshake.headers);
+
+//     const cookieHeader = socket.handshake.headers.cookie;
+//     console.log("🍪 RAW COOKIE HEADER:", cookieHeader);
+
+//     if (!cookieHeader) {
+//       console.log("❌ No cookies sent");
+//       return next(new Error("Unauthorized"));
+//     }
+
+//     const cookies = cookie.parse(cookieHeader);
+//     console.log("🍪 PARSED COOKIES:", cookies);
+
+//     let token = cookies.access_token;
+//     console.log("🔑 RAW TOKEN:", token);
+
+//     if (!token) {
+//       console.log("❌ access_token missing");
+//       return next(new Error("Unauthorized"));
+//     }
+
+//     if (token.startsWith("Bearer ")) {
+//       token = token.slice(7);
+//     }
+
+//     const payload = verifyAccessToken(token);
+
+//     socket.user = { id: payload.id };
+//     console.log("✅ Socket authenticated:", socket.user.id);
+
+//     next();
+//   } catch (err) {
+//     console.error("❌ Socket auth error:", err.message);
+//     next(new Error("Unauthorized"));
+//   }
+// });
+io.use(async (socket, next) => {
+  try {
+    const cookieHeader = socket.handshake.headers.cookie;
+    if (!cookieHeader) return next(new Error("Unauthorized"));
+
+    const cookies = cookie.parse(cookieHeader);
+    const token = cookies.access_token;
+
+    if (!token) return next(new Error("Unauthorized"));
+
+    // ✅ DB-based validation
+    const user = await verifyOpaqueToken(token);
+
+    socket.user = { id: user.id, email: user.email };
+
+    console.log("✅ Socket authenticated:", socket.user.id);
+    next();
+  } catch (err) {
+    console.error("❌ Socket auth error:", err.message);
+    next(new Error("Unauthorized"));
+  }
+});
+
+
+
 io.on("connection", (socket) => {
-  console.log(`🟢 User connected: ${socket.id}`);
-
-  // Listen for chat messages
-  socket.on("sendMessage", (data) => {
-    console.log("📩 Message received:", data);
-
-    // Broadcast message to everyone (including sender)
-    io.emit("receiveMessage", data);
+  socket.emit("auth-success", {
+   userId: socket.user.id,
+ });
+  socket.on("joinChannel", ({ channelId }) => {
+    socket.join(`channel_${channelId}`);
   });
 
-  // When user disconnects
-  socket.on("disconnect", () => {
-    console.log(`🔴 User disconnected: ${socket.id}`);
+  console.log("User Connected:", socket.id, "user:", socket.user && socket.user.id);
+
+  // socket.on("sendMessage", ({ content, sender_id, channel_id }) => {
+  //   if (!channel_id) return;
+  //   db.query(
+  //     "INSERT INTO messages (`channel_id`, `sender_id`, `content`) VALUES (?, ?, ?)",
+  //     [channel_id, sender_id, content],
+  //     (err, result) => {
+  //       if (err) {
+  //         console.error("DB insert error:", err);
+  //         socket.emit("messageError", { error: err.message });
+  //         return;
+  //       }
+  //       const payload = {
+  //         id: result.insertId,
+  //         channel_id,
+  //         content,
+  //         sender_id,
+  //         created_at: new Date(),
+  //       };
+  //       io.to(`channel_${channel_id}`).emit("receiveMessage", payload);
+  //       socket.emit("messageAck", payload);
+  //     }
+  //   );
+  // });
+
+  socket.on("sendMessage", ({ content, channel_id }) => {
+    if (!channel_id || !content) return;
+    const sender_id = socket.user.id;
+
+    db.query(
+      "INSERT INTO messages (`channel_id`, `sender_id`, `content`) VALUES (?, ?, ?)",
+      [channel_id, sender_id, content],
+      (err, result) => {
+        if (err) {
+          console.error("DB insert error:", err);
+          socket.emit("messageError", { error: err.message });
+          return;
+        }
+        const payload = {
+          id: result.insertId,
+          channel_id,
+          content,
+          sender_id,
+          created_at: new Date().toISOString(),
+        };
+        // emit to that channel room
+        io.to(`channel_${channel_id}`).emit("receiveMessage", payload);
+        socket.emit("messageAck", payload);
+      }
+    );
   });
-});
 
-// ✅ CRUD Routes
+  // socket.on("reactMessage", ({ messageId, emoji, sender_id }) => {
+  //   if (!messageId || !emoji || !sender_id) return;
 
-// CREATE
-app.post("/users", async (req, res) => {
-  try {
-    const user = await User.create(req.body);
-    res.status(201).json(user);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
+  //   db.query(
+  //     "SELECT reactions FROM messages WHERE id = ?",
+  //     [messageId],
+  //     (err, rows) => {
+  //       if (err || !rows.length) return;
 
-// READ all
-app.get("/users", async (req, res) => {
-  const users = await User.find();
-  res.json(users);
-});
+  //       let reactions = [];
+  //       try {
+  //         reactions = JSON.parse(rows[0].reactions || "[]");
+  //       } catch (e) {
+  //         reactions = [];
+  //       }
 
-// READ one
-app.get("/users/:id", async (req, res) => {
-  try {
-    const user = await User.findById(req.params.id);
-    if (!user) return res.status(404).json({ error: "User not found" });
-    res.json(user);
-  } catch (err) {
-    res.status(400).json({ error: "Invalid ID" });
-  }
-});
+  //       let entry = reactions.find((r) => r.emoji === emoji);
 
-// UPDATE
-app.put("/users/:id", async (req, res) => {
-  try {
-    const user = await User.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
+  //       if (entry) {
+  //         // Always treat missing users as []
+  //         const users = Array.isArray(entry.users) ? entry.users : [];
+  //         const hasReacted = users.includes(sender_id);
+
+  //         if (hasReacted) {
+  //           const newUsers = users.filter((u) => u !== sender_id);
+  //           if (newUsers.length === 0) {
+  //             // remove this emoji entirely
+  //             reactions = reactions.filter((r) => r.emoji !== emoji);
+  //           } else {
+  //             entry.users = newUsers;
+  //             entry.count = newUsers.length;
+  //           }
+  //         } else {
+  //           const newUsers = [...users, sender_id];
+  //           entry.users = newUsers;
+  //           entry.count = newUsers.length;
+  //         }
+  //       } else {
+  //         // fresh reaction
+  //         reactions.push({
+  //           emoji,
+  //           count: 1,
+  //           users: [sender_id],
+  //         });
+  //       }
+
+  //       db.query(
+  //         "UPDATE messages SET reactions = ? WHERE id = ?",
+  //         [JSON.stringify(reactions), messageId],
+  //         () => {
+  //           io.emit("reactionUpdated", {
+  //             messageId,
+  //             reactions,
+  //           });
+  //         }
+  //       );
+  //     }
+  //   );
+  // });
+
+ socket.on("reactMessage", ({ messageId, emoji }) => {
+    if (!messageId || !emoji) return;
+
+    // fetch message to get channel_id and reactions
+    db.query("SELECT channel_id, reactions FROM messages WHERE id = ? LIMIT 1", [messageId], (err, rows) => {
+      if (err || !rows.length) {
+        console.error("reactMessage - DB error or not found", err);
+        return;
+      }
+      const channel_id = rows[0].channel_id;
+      let reactions = [];
+      try {
+        reactions = JSON.parse(rows[0].reactions || "[]");
+      } catch (e) {
+        reactions = [];
+      }
+
+      // ensure users array exists, and modify reactions using server-side user id
+      const userId = socket.user.id;
+      let entry = reactions.find((r) => r.emoji === emoji);
+
+      if (entry) {
+        const users = Array.isArray(entry.users) ? entry.users : [];
+        const hasReacted = users.includes(String(userId));
+
+        if (hasReacted) {
+          const newUsers = users.filter((u) => String(u) !== String(userId));
+          if (newUsers.length === 0) {
+            reactions = reactions.filter((r) => r.emoji !== emoji);
+          } else {
+            entry.users = newUsers;
+            entry.count = newUsers.length;
+          }
+        } else {
+          const newUsers = [...users, String(userId)];
+          entry.users = newUsers;
+          entry.count = newUsers.length;
+        }
+      } else {
+        reactions.push({
+          emoji,
+          count: 1,
+          users: [String(userId)],
+        });
+      }
+
+      db.query("UPDATE messages SET reactions = ? WHERE id = ?", [JSON.stringify(reactions), messageId], (err2) => {
+        if (err2) {
+          console.error("Failed to save reactions:", err2);
+          return;
+        }
+        // Emit only to the channel room
+        io.to(`channel_${channel_id}`).emit("reactionUpdated", {
+          messageId,
+          reactions,
+        });
+      });
     });
-    if (!user) return res.status(404).json({ error: "User not found" });
-    res.json(user);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
+  });
+
+  // socket.on("messageEdited", (msg) => {
+  //   setMessages((prev) =>
+  //     prev.map((m) =>
+  //       String(m.id) === String(msg.id)
+  //         ? { ...m, content: msg.content, updated_at: msg.updated_at }
+  //         : m
+  //     )
+  //   );
+  // });
+
+  socket.on("editMessage", ({ messageId, content, channel_id }) => {
+    if (!messageId || !channel_id || !content) return;
+    const editorId = socket.user.id;
+    db.query(
+      "SELECT sender_id FROM messages WHERE id = ? AND channel_id = ? LIMIT 1",
+      [messageId, channel_id],
+      (err, rows) => {
+        if (err || !rows.length) return;
+        if (String(rows[0].sender_id) !== String(editorId)) return; // only author can edit
+
+        db.query(
+          "UPDATE messages SET content = ?, updated_at = NOW() WHERE id = ? AND channel_id = ?",
+          [content, messageId, channel_id],
+          (err2) => {
+            if (err2) {
+              console.error("Edit save error:", err2);
+              return;
+            }
+            const payload = {
+              id: messageId,
+              content,
+              channel_id,
+              updated_at: new Date().toISOString(),
+            };
+            io.to(`channel_${channel_id}`).emit("messageEdited", payload);
+          }
+        );
+      }
+    );
+  });
+
+  //channel message
+  // socket.on("sendChannelMessage", ({ content, sender_id, channel_id }) => {
+  //   if (!channel_id) return;
+
+  //   db.query(
+  //     "INSERT INTO messages (`channel_id`, `sender_id`, `content`) VALUES (?, ?, ?)",
+  //     [channel_id, sender_id, content],
+  //     (err, result) => {
+  //       if (err) {
+  //         console.error("DB insert error:", err);
+  //         socket.emit("messageError", { error: err.message });
+  //         return;
+  //       }
+
+  //       const payload = {
+  //         id: result.insertId,
+  //         channel_id,
+  //         content,
+  //         sender_id,
+  //         created_at: new Date(),
+  //       };
+
+  //       io.to(`channel_${channel_id}`).emit("receiveMessage", payload);
+  //       socket.emit("messageAck", payload);
+  //     }
+  //   );
+  // });
+
+  // socket.on("editMessage", ({ messageId, content, channel_id }) => {
+  //   if (!messageId || !channel_id) return;
+
+  //   const editorId = socket.handshake.auth?.userId;
+  //   if (!editorId) return;
+
+  //   db.query(
+  //     "SELECT sender_id FROM messages WHERE id = ? AND channel_id = ?",
+  //     [messageId, channel_id],
+  //     (err, rows) => {
+  //       if (err || !rows.length) return;
+
+  //       if (String(rows[0].sender_id) !== String(editorId)) return;
+
+  //       db.query(
+  //         "UPDATE messages SET content = ?, updated_at = NOW() WHERE id = ? AND channel_id = ?",
+  //         [content, messageId, channel_id],
+  //         () => {
+  //           const payload = {
+  //             id: messageId,
+  //             content,
+  //             channel_id,
+  //             updated_at: new Date().toISOString(),
+  //           };
+
+  //           io.to(`channel_${channel_id}`).emit("messageEdited", payload);
+  //         }
+  //       );
+  //     }
+  //   );
+  // });
+
+  socket.on("deleteMessage", ({ id }) => {
+    if (!id) return;
+    const userId = socket.user.id;
+    // verify ownership before deleting
+    db.query("SELECT sender_id, channel_id FROM messages WHERE id = ? LIMIT 1", [id], (err, rows) => {
+      if (err || !rows.length) return;
+      if (String(rows[0].sender_id) !== String(userId)) return;
+      const channel_id = rows[0].channel_id;
+      db.query("DELETE FROM messages WHERE id = ?", [id], (err2) => {
+        if (err2) return;
+        io.to(`channel_${channel_id}`).emit("messageDeleted", { id });
+      });
+    });
+  });
+
+  socket.on("disconnect", () => console.log("User disconnected:", socket.id));
 });
 
-// DELETE
-app.delete("/users/:id", async (req, res) => {
-  try {
-    const user = await User.findByIdAndDelete(req.params.id);
-    if (!user) return res.status(404).json({ error: "User not found" });
-    res.json({ message: "User deleted" });
-  } catch (err) {
-    res.status(400).json({ error: "Invalid ID" });
-  }
+// simple API routes
+app.get("/", (req, res) => res.send("Socket.IO Chat Backend Running"));
+
+app.get("/messages", (req, res) => {
+  // res.send( "This endpoint is under construction." );
+  db.query("SELECT * FROM messages ORDER BY id ASC LIMIT 50", (err, rows) => {
+    if (err) return res.status(500).json({ error: "DB Error" });
+    res.json(rows);
+  });
 });
 
+app.use("/test", (req, res) => {
+  res.send("Test route working");
+});
+
+app.use("/channels", channelRoutes);
+app.use("/search", searchRouter);
+app.use("/users", usersRouter);
+app.use("/threads", threadsRouter);
+app.use("/auth", authRouter);
+app.use("/external", externalRouter);
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
-
+server.listen(PORT, () => console.log("Server running on port", PORT));
