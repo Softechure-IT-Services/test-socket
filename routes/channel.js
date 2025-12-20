@@ -58,7 +58,7 @@ router.get("/:channelId", (req, res) => {
   const sqlMessages =
     "SELECT * FROM messages WHERE channel_id = ? ORDER BY id ASC LIMIT 50";
   const sqlMembers = `
-    SELECT u.id, u.username, u.email
+    SELECT u.id, u.name, u.email
     FROM channel_members cm
     JOIN users u ON cm.user_id = u.id
     WHERE cm.channel_id = ?
@@ -79,7 +79,7 @@ router.get("/:channelId", (req, res) => {
       response.messages = messages;
 
       db.query(sqlMembers, [channelId], (err, members) => {
-        if (err) return res.status(500).json({ error: "DB Error" });
+        if (err) return res.status(500).json({ error: "DB Error2" });
 
         response.members = members;
         res.json(response);

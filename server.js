@@ -111,6 +111,9 @@ io.on("connection", (socket) => {
   socket.on("joinChannel", ({ channelId }) => {
     socket.join(`channel_${channelId}`);
   });
+  socket.on("leaveChannel", ({ channel_id }) => {
+  socket.leave(`channel_${channel_id}`);
+});
 
   console.log("User Connected:", socket.id, "user:", socket.user && socket.user.id);
 

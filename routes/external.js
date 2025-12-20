@@ -162,7 +162,7 @@ router.post("/external-session", (req, res) => {
     const userId = payload.uid;
 
     const sql = `
-      SELECT id, name, email, avatar_url, created_at
+      SELECT id, name, email, avatar_url, created_at, auth_token
       FROM users
       WHERE id = ?
       LIMIT 1
