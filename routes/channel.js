@@ -5,12 +5,26 @@ const verifyToken = require("../middleware/auth");
 
 
 // Get all channels
-router.get("/", (req, res) => {
-  db.query("SELECT * FROM channels", (err, rows) => {
+router.get("/", verifyToken, (req, res) => {
+  const userId = req.user.id;
+
+  const sql = `
+    SELECT DISTINCT c.*
+    FROM channels c
+    LEFT JOIN channel_members cm 
+      ON c.id = cm.channel_id AND cm.user_id = ?
+    WHERE 
+      c.is_private = 0
+      OR cm.user_id IS NOT NULL
+    ORDER BY c.created_at DESC
+  `;
+
+  db.query(sql, [userId], (err, rows) => {
     if (err) return res.status(500).json({ error: "DB Error" });
     res.json(rows);
   });
 });
+
 
 // Get messages for a specific channel
 router.get("/:channelId/messages", (req, res) => {
@@ -43,12 +57,116 @@ router.get("/:channelId/members", verifyToken,(req, res) => {
 
 // Optionally, create a new channel
 router.post("/", verifyToken, (req, res) => {
-  const { name } = req.body;
-  db.query("INSERT INTO channels (name) VALUES (?)", [name], (err, result) => {
-    if (err) return res.status(500).json({ error: "DB Error" });
-    res.json({ id: result.insertId, name });
+  const { name, isPrivate, memberIds = [] } = req.body;
+  const userId = req.user.id;
+
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: "Channel name required" });
+  }
+
+  // ❌ Private channel must have members
+  if (isPrivate && memberIds.length === 0) {
+    return res
+      .status(400)
+      .json({ error: "Private channel needs members" });
+  }
+
+  db.beginTransaction((err) => {
+    if (err) return res.status(500).json({ error: "Transaction error" });
+
+    const insertChannelSql = `
+      INSERT INTO channels (name, is_private, is_dm, created_by)
+      VALUES (?, ?, 0, ?)
+    `;
+
+    db.query(
+      insertChannelSql,
+      [name.trim(), isPrivate ? 1 : 0, userId],
+      (err, result) => {
+        if (err) {
+          return db.rollback(() =>
+            res.status(500).json({ error: "Channel creation failed" })
+          );
+        }
+
+        const channelId = result.insertId;
+
+        // 🟢 PUBLIC CHANNEL → NO MEMBERS
+        if (!isPrivate) {
+          return db.commit(() => {
+            res.status(201).json({
+              id: channelId,
+              name,
+              isPrivate: false,
+            });
+          });
+        }
+
+        // 🔒 PRIVATE CHANNEL → ADD MEMBERS
+        const uniqueMemberIds = Array.from(
+          new Set([userId, ...memberIds])
+        );
+
+        const memberValues = uniqueMemberIds.map((uid) => [
+          channelId,
+          uid,
+        ]);
+
+        db.query(
+          `INSERT INTO channel_members (channel_id, user_id) VALUES ?`,
+          [memberValues],
+          (err) => {
+            if (err) {
+              return db.rollback(() =>
+                res.status(500).json({ error: "Adding members failed" })
+              );
+            }
+
+            db.commit(() => {
+              res.status(201).json({
+                id: channelId,
+                name,
+                isPrivate: true,
+                members: uniqueMemberIds,
+              });
+            });
+          }
+        );
+      }
+    );
   });
 });
+
+router.post("/:channelId/join", verifyToken, (req, res) => {
+  const userId = req.user.id;
+  const channelId = req.params.channelId;
+
+  const checkSql = `
+    SELECT is_private FROM channels WHERE id = ?
+  `;
+
+  db.query(checkSql, [channelId], (err, rows) => {
+    if (err || !rows.length)
+      return res.status(404).json({ error: "Channel not found" });
+
+    if (rows[0].is_private) {
+      return res
+        .status(403)
+        .json({ error: "Cannot join private channel" });
+    }
+
+    const joinSql = `
+      INSERT IGNORE INTO channel_members (channel_id, user_id)
+      VALUES (?, ?)
+    `;
+
+    db.query(joinSql, [channelId, userId], (err) => {
+      if (err) return res.status(500).json({ error: "Join failed" });
+      res.json({ success: true });
+    });
+  });
+});
+
 
 // Get channel info + members + last 50 messages
 router.get("/:channelId", (req, res) => {
