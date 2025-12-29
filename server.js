@@ -21,7 +21,8 @@ const app = express();
 app.use(cookieParser());
 const allowedOrigins = [
   "http://localhost:3000",
-  "http://192.168.0.113:3000",
+  "http://192.168.1.14:3000",
+  "http://192.168.1.15:3000",
   "http://192.168.0.113:5000",
   process.env.CLIENT_URL,
 ].filter(Boolean);
@@ -92,7 +93,7 @@ io.use(async (socket, next) => {
     // ✅ DB-based validation
     const user = await verifyOpaqueToken(token);
 
-    socket.user = { id: user.id, email: user.email };
+    socket.user = { id: user.id, email: user.email, name: user.name, avatar_url: user.avatar_url };
 
     console.log("✅ Socket authenticated:", socket.user.id);
     next();
@@ -106,7 +107,7 @@ io.use(async (socket, next) => {
 
 io.on("connection", (socket) => {
   socket.emit("auth-success", {
-   userId: socket.user.id,
+   user: socket.user,
  });
   socket.on("joinChannel", ({ channelId }) => {
     socket.join(`channel_${channelId}`);

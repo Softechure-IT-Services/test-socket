@@ -3,7 +3,7 @@ const db = require("../db");
 function verifyOpaqueToken(token) {
   return new Promise((resolve, reject) => {
     const sql = `
-      SELECT id, email
+      SELECT id, name, email, avatar_url
       FROM users
       WHERE auth_token = ?
       LIMIT 1
@@ -16,7 +16,9 @@ function verifyOpaqueToken(token) {
 
       resolve({
         id: rows[0].id,
+        name: rows[0].name,
         email: rows[0].email,
+        avatar_url: rows[0].avatar_url,
       });
     });
   });
