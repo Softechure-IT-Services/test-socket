@@ -31,7 +31,7 @@ router.get("/:userId", (req, res) => {
 });
 
 // Create user
-router.post("/", verifyToken, (req, res) => {
+router.post("/", (req, res) => {
   const body = req.body;
 
   if (!body || typeof body !== "object") {
@@ -70,7 +70,7 @@ router.post("/", verifyToken, (req, res) => {
 });
 
 // Update user
-router.put("/:userId", verifyToken, (req, res) => {
+router.put("/:userId", (req, res) => {
   const { userId } = req.params;
   const { name, email, avatar_url } = req.body;
 
@@ -96,7 +96,7 @@ router.put("/:userId", verifyToken, (req, res) => {
 });
 
 // Set user online
-router.post("/:userId/online", verifyToken, (req, res) => {
+router.post("/:userId/online", (req, res) => {
   const { userId } = req.params;
 
   db.query(
@@ -110,7 +110,7 @@ router.post("/:userId/online", verifyToken, (req, res) => {
 });
 
 // Set user offline
-router.post("/:userId/offline", verifyToken, (req, res) => {
+router.post("/:userId/offline", (req, res) => {
   const { userId } = req.params;
 
   db.query(

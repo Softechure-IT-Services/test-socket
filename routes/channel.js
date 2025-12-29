@@ -5,7 +5,7 @@ const verifyToken = require("../middleware/auth");
 
 
 // Get all channels
-router.get("/", verifyToken, (req, res) => {
+router.get("/", (req, res) => {
   const userId = req.user.id;
 
   const sql = `
@@ -40,7 +40,7 @@ router.get("/:channelId/messages", (req, res) => {
 });
 
 // Get members of a specific channel
-router.get("/:channelId/members", verifyToken,(req, res) => {
+router.get("/:channelId/members",(req, res) => {
   const { channelId } = req.params;
   db.query(
     `SELECT u.id, u.username, u.email 
@@ -56,7 +56,7 @@ router.get("/:channelId/members", verifyToken,(req, res) => {
 });
 
 // Optionally, create a new channel
-router.post("/", verifyToken, (req, res) => {
+router.post("/", (req, res) => {
   const { name, isPrivate, memberIds = [] } = req.body;
   const userId = req.user.id;
 
@@ -137,7 +137,7 @@ router.post("/", verifyToken, (req, res) => {
   });
 });
 
-router.post("/:channelId/join", verifyToken, (req, res) => {
+router.post("/:channelId/join", (req, res) => {
   const userId = req.user.id;
   const channelId = req.params.channelId;
 
