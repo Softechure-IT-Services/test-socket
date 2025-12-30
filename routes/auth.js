@@ -108,7 +108,7 @@ router.post("/login", (req, res) => {
     return res.status(400).json({ error: "Email and password are required" });
 
   const sql = `SELECT * FROM users WHERE email = ? LIMIT 1`;
-  db.query(sql, [email], async (err, rows) => {
+  db.query(sql, email, async (err, rows) => {
     if (err) return res.status(500).json({ error: `DB error: ${err.message}` });
     if (!rows.length) return res.status(404).json({ error: "User not found" });
 
