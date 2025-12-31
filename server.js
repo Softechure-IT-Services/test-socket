@@ -61,7 +61,8 @@ io.use(async (socket, next) => {
     if (!token) return next(new Error("Unauthorized"));
 
     // ✅ DB-based validation
-    const user = await verifyOpaqueToken(token);
+    // const user = await verifyOpaqueToken(token);
+    const user = verifyAccessToken(token);
 
     socket.user = { id: user.id, email: user.email, name: user.name, avatar_url: user.avatar_url };
 
