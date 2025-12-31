@@ -3,7 +3,7 @@ const router = express.Router();
 const db = require("../db");
 const verifyToken = require("../middleware/auth");
 
-
+router.use(verifyToken);
 // Get all channels
 router.get("/", (req, res) => {
   const userId = req.user.id;

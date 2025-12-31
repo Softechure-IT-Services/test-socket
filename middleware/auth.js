@@ -1,17 +1,24 @@
-// utils/authMiddleware.js
-const { verifyOpaqueToken } = require("../utils/tokenAuth");
+const { verifyAccessToken } = require("../utils/jwt");
 
-async function authenticateCookie(req, res, next) {
+function authenticateCookie(req, res, next) {
+  const token = req.cookies?.access_token;
+
+  if (!token) {
+    return res.status(401).json({ error: "No access token" });
+  }
+
   try {
-    const token = req.cookies && req.cookies.access_token;
-    if (!token) return res.status(401).json({ error: "Unauthorized" });
-    // const payload = verifyAccessToken(token);
-    const payload = await verifyOpaqueToken(token);
-    if (!payload || !payload.id) return res.status(401).json({ error: "Unauthorized" });
-    req.user = { id: payload.id, email: payload.email || null };
+    const payload = verifyAccessToken(token);
+
+    req.user = {
+      id: payload.id,
+      email: payload.email,
+    };
+
     next();
   } catch (err) {
-    return res.status(401).json({ error: "Unauthorized" });
+    console.error("JWT VERIFY FAILED:", err.message);
+    return res.status(401).json({ error: "Invalid or expired token" });
   }
 }
 

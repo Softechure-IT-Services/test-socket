@@ -37,50 +37,19 @@ app.use(express.json());
 
 const server = http.createServer(app);
 
+// const io = new Server(server, {
+//   cors: { origin: allowedOrigins, methods: ["GET", "POST"], credentials: true },
+//   path: "/socket.io",    
+// });
+
 const io = new Server(server, {
-  cors: { origin: allowedOrigins, methods: ["GET", "POST"], credentials: true },
-  path: "/socket.io",
+  cors: {
+    origin: allowedOrigins,
+    credentials: true,
+  },
 });
 
 
-// io.use((socket, next) => {
-//   try {
-//     console.log("🔌 SOCKET HANDSHAKE HEADERS:", socket.handshake.headers);
-
-//     const cookieHeader = socket.handshake.headers.cookie;
-//     console.log("🍪 RAW COOKIE HEADER:", cookieHeader);
-
-//     if (!cookieHeader) {
-//       console.log("❌ No cookies sent");
-//       return next(new Error("Unauthorized"));
-//     }
-
-//     const cookies = cookie.parse(cookieHeader);
-//     console.log("🍪 PARSED COOKIES:", cookies);
-
-//     let token = cookies.access_token;
-//     console.log("🔑 RAW TOKEN:", token);
-
-//     if (!token) {
-//       console.log("❌ access_token missing");
-//       return next(new Error("Unauthorized"));
-//     }
-
-//     if (token.startsWith("Bearer ")) {
-//       token = token.slice(7);
-//     }
-
-//     const payload = verifyAccessToken(token);
-
-//     socket.user = { id: payload.id };
-//     console.log("✅ Socket authenticated:", socket.user.id);
-
-//     next();
-//   } catch (err) {
-//     console.error("❌ Socket auth error:", err.message);
-//     next(new Error("Unauthorized"));
-//   }
-// });
 io.use(async (socket, next) => {
   try {
     const cookieHeader = socket.handshake.headers.cookie;
@@ -119,29 +88,6 @@ io.on("connection", (socket) => {
 
   console.log("User Connected:", socket.id, "user:", socket.user && socket.user.id);
 
-  // socket.on("sendMessage", ({ content, sender_id, channel_id }) => {
-  //   if (!channel_id) return;
-  //   db.query(
-  //     "INSERT INTO messages (`channel_id`, `sender_id`, `content`) VALUES (?, ?, ?)",
-  //     [channel_id, sender_id, content],
-  //     (err, result) => {
-  //       if (err) {
-  //         console.error("DB insert error:", err);
-  //         socket.emit("messageError", { error: err.message });
-  //         return;
-  //       }
-  //       const payload = {
-  //         id: result.insertId,
-  //         channel_id,
-  //         content,
-  //         sender_id,
-  //         created_at: new Date(),
-  //       };
-  //       io.to(`channel_${channel_id}`).emit("receiveMessage", payload);
-  //       socket.emit("messageAck", payload);
-  //     }
-  //   );
-  // });
 
   socket.on("sendMessage", ({ content, channel_id }) => {
     if (!channel_id || !content) return;
@@ -169,66 +115,6 @@ io.on("connection", (socket) => {
       }
     );
   });
-
-  // socket.on("reactMessage", ({ messageId, emoji, sender_id }) => {
-  //   if (!messageId || !emoji || !sender_id) return;
-
-  //   db.query(
-  //     "SELECT reactions FROM messages WHERE id = ?",
-  //     [messageId],
-  //     (err, rows) => {
-  //       if (err || !rows.length) return;
-
-  //       let reactions = [];
-  //       try {
-  //         reactions = JSON.parse(rows[0].reactions || "[]");
-  //       } catch (e) {
-  //         reactions = [];
-  //       }
-
-  //       let entry = reactions.find((r) => r.emoji === emoji);
-
-  //       if (entry) {
-  //         // Always treat missing users as []
-  //         const users = Array.isArray(entry.users) ? entry.users : [];
-  //         const hasReacted = users.includes(sender_id);
-
-  //         if (hasReacted) {
-  //           const newUsers = users.filter((u) => u !== sender_id);
-  //           if (newUsers.length === 0) {
-  //             // remove this emoji entirely
-  //             reactions = reactions.filter((r) => r.emoji !== emoji);
-  //           } else {
-  //             entry.users = newUsers;
-  //             entry.count = newUsers.length;
-  //           }
-  //         } else {
-  //           const newUsers = [...users, sender_id];
-  //           entry.users = newUsers;
-  //           entry.count = newUsers.length;
-  //         }
-  //       } else {
-  //         // fresh reaction
-  //         reactions.push({
-  //           emoji,
-  //           count: 1,
-  //           users: [sender_id],
-  //         });
-  //       }
-
-  //       db.query(
-  //         "UPDATE messages SET reactions = ? WHERE id = ?",
-  //         [JSON.stringify(reactions), messageId],
-  //         () => {
-  //           io.emit("reactionUpdated", {
-  //             messageId,
-  //             reactions,
-  //           });
-  //         }
-  //       );
-  //     }
-  //   );
-  // });
 
  socket.on("reactMessage", ({ messageId, emoji }) => {
     if (!messageId || !emoji) return;
@@ -290,15 +176,6 @@ io.on("connection", (socket) => {
     });
   });
 
-  // socket.on("messageEdited", (msg) => {
-  //   setMessages((prev) =>
-  //     prev.map((m) =>
-  //       String(m.id) === String(msg.id)
-  //         ? { ...m, content: msg.content, updated_at: msg.updated_at }
-  //         : m
-  //     )
-  //   );
-  // });
 
   socket.on("editMessage", ({ messageId, content, channel_id }) => {
     if (!messageId || !channel_id || !content) return;
@@ -331,65 +208,6 @@ io.on("connection", (socket) => {
     );
   });
 
-  //channel message
-  // socket.on("sendChannelMessage", ({ content, sender_id, channel_id }) => {
-  //   if (!channel_id) return;
-
-  //   db.query(
-  //     "INSERT INTO messages (`channel_id`, `sender_id`, `content`) VALUES (?, ?, ?)",
-  //     [channel_id, sender_id, content],
-  //     (err, result) => {
-  //       if (err) {
-  //         console.error("DB insert error:", err);
-  //         socket.emit("messageError", { error: err.message });
-  //         return;
-  //       }
-
-  //       const payload = {
-  //         id: result.insertId,
-  //         channel_id,
-  //         content,
-  //         sender_id,
-  //         created_at: new Date(),
-  //       };
-
-  //       io.to(`channel_${channel_id}`).emit("receiveMessage", payload);
-  //       socket.emit("messageAck", payload);
-  //     }
-  //   );
-  // });
-
-  // socket.on("editMessage", ({ messageId, content, channel_id }) => {
-  //   if (!messageId || !channel_id) return;
-
-  //   const editorId = socket.handshake.auth?.userId;
-  //   if (!editorId) return;
-
-  //   db.query(
-  //     "SELECT sender_id FROM messages WHERE id = ? AND channel_id = ?",
-  //     [messageId, channel_id],
-  //     (err, rows) => {
-  //       if (err || !rows.length) return;
-
-  //       if (String(rows[0].sender_id) !== String(editorId)) return;
-
-  //       db.query(
-  //         "UPDATE messages SET content = ?, updated_at = NOW() WHERE id = ? AND channel_id = ?",
-  //         [content, messageId, channel_id],
-  //         () => {
-  //           const payload = {
-  //             id: messageId,
-  //             content,
-  //             channel_id,
-  //             updated_at: new Date().toISOString(),
-  //           };
-
-  //           io.to(`channel_${channel_id}`).emit("messageEdited", payload);
-  //         }
-  //       );
-  //     }
-  //   );
-  // });
 
   socket.on("deleteMessage", ({ id }) => {
     if (!id) return;

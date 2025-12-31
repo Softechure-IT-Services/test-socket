@@ -188,16 +188,20 @@ router.post("/external-session", (req, res) => {
     //     secure: false, // true in production HTTPS
     //     path: "/",
     //   });
-    res.cookie("access_token", user.auth_token, { httpOnly: true });
-
+      res.cookie("access_token", accessToken, {
+        httpOnly: true,
+        sameSite: "none",
+        secure: false,
+        path: "/",
+      });
 
       // optional non-httpOnly cookies
-      res.cookie("user_id", String(user.id), { sameSite: "lax" });
-      res.cookie("username", user.name, { sameSite: "lax" });
-      res.cookie("email", user.email, { sameSite: "lax" });
-      res.cookie("avatar_url", user.avatar_url || "", { sameSite: "lax" });
+      res.cookie("user_id", String(user.id), { sameSite: "none" });
+      res.cookie("username", user.name, { sameSite: "none" });
+      res.cookie("email", user.email, { sameSite: "none" });
+      res.cookie("avatar_url", user.avatar_url || "", { sameSite: "none" });
       res.cookie("created_at", user.created_at.toISOString(), {
-        sameSite: "lax",
+        sameSite: "none",
       });
 
       return res.json({ success: true });
