@@ -38,6 +38,7 @@ router.get("/:channelId/messages", (req, res) => {
       m.content,
       m.created_at,
       m.updated_at,
+      m.pinned,
       u.name AS sender_name,
       u.avatar_url
     FROM messages m
@@ -221,6 +222,96 @@ router.get("/:channelId", (req, res) => {
   });
 });
 
+// Pin a message (REST)
+router.post("/:channelId/pin/:messageId", (req, res) => {
+  const { channelId, messageId } = req.params;
+  const userId = req.user.id;
+
+  // Check channel and membership if private
+  db.query("SELECT is_private, created_by FROM channels WHERE id = ? LIMIT 1", [channelId], (err, chRows) => {
+    if (err || !chRows.length) return res.status(404).json({ error: "Channel not found" });
+    const channel = chRows[0];
+
+    const proceed = () => {
+      // Ensure message exists and not already pinned
+      db.query("SELECT pinned FROM messages WHERE id = ? AND channel_id = ? LIMIT 1", [messageId, channelId], (err2, msgRows) => {
+        if (err2 || !msgRows.length) return res.status(404).json({ error: "Message not found" });
+        if (msgRows[0].pinned) return res.status(400).json({ error: "Message already pinned" });
+
+        db.query("UPDATE messages SET pinned = 1, pinned_by = ?, pinned_at = NOW() WHERE id = ? AND channel_id = ?", [userId, messageId, channelId], (err3) => {
+          if (err3) return res.status(500).json({ error: "DB Error" });
+          res.json({ success: true });
+        });
+      });
+    };
+
+    if (channel.is_private) {
+      // verify membership
+      db.query("SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ? LIMIT 1", [channelId, userId], (errm, memRows) => {
+        if (errm) return res.status(500).json({ error: "DB Error" });
+        if (!memRows.length) return res.status(403).json({ error: "Not a channel member" });
+        proceed();
+      });
+    } else {
+      proceed();
+    }
+  });
+});
+
+// Unpin a message (REST)
+router.delete("/:channelId/pin/:messageId", (req, res) => {
+  const { channelId, messageId } = req.params;
+  const userId = req.user.id;
+
+  // fetch message to check pinned_by and channel creator
+  const sql = `
+    SELECT m.pinned, m.pinned_by, c.created_by
+    FROM messages m
+    JOIN channels c ON c.id = ?
+    WHERE m.id = ? AND m.channel_id = ? LIMIT 1
+  `;
+  db.query(sql, [channelId, messageId, channelId], (err, rows) => {
+    if (err || !rows.length) return res.status(404).json({ error: "Message or channel not found" });
+    const row = rows[0];
+    if (!row.pinned) return res.status(400).json({ error: "Message is not pinned" });
+
+    // Only the user who pinned OR channel creator can unpin
+    if (String(row.pinned_by) !== String(userId) && String(row.created_by) !== String(userId)) {
+      return res.status(403).json({ error: "Not allowed to unpin" });
+    }
+
+    db.query("UPDATE messages SET pinned = 0, pinned_by = NULL, pinned_at = NULL WHERE id = ? AND channel_id = ?", [messageId, channelId], (err2) => {
+      if (err2) return res.status(500).json({ error: "DB Error" });
+      res.json({ success: true });
+    });
+  });
+});
+
+// List pinned messages for a channel (REST)
+router.get("/:channelId/pins", (req, res) => {
+  const { channelId } = req.params;
+
+  const sql = `
+    SELECT
+      m.id,
+      m.content,
+      m.sender_id,
+      u.name AS sender_name,
+      u.avatar_url,
+      m.pinned_by,
+      p.name AS pinner_name,
+      m.pinned_at
+    FROM messages m
+    JOIN users u ON u.id = m.sender_id
+    LEFT JOIN users p ON p.id = m.pinned_by
+    WHERE m.channel_id = ? AND m.pinned = 1
+    ORDER BY m.pinned_at DESC
+  `;
+  db.query(sql, [channelId], (err, rows) => {
+    if (err) return res.status(500).json({ error: "DB Error" });
+    res.json(rows);
+  });
+});
 
 
 
