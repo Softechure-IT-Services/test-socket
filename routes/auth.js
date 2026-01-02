@@ -126,7 +126,7 @@ router.post("/login", (req, res) => {
       if (err2) console.error("Failed to store refresh token:", err2);
       // set cookies regardless of DB result (but log errors)
       res.cookie("access_token", accessToken, accessCookieOptions);
-      // res.cookie("refresh_token", refreshToken, refreshCookieOptions);
+      res.cookie("refresh_token", refreshToken, refreshCookieOptions);
       res.cookie("user_id", String(user.id), { sameSite: isProd ? "none" : "lax", secure: isProd, httpOnly: false, path: "/" });
 res.cookie("username", user.name || "", { sameSite: isProd ? "none" : "lax", secure: isProd, httpOnly: false, path: "/" });
 

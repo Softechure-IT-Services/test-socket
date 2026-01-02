@@ -29,15 +29,30 @@ router.get("/", (req, res) => {
 // Get messages for a specific channel
 router.get("/:channelId/messages", (req, res) => {
   const { channelId } = req.params;
-  db.query(
-    "SELECT * FROM messages WHERE channel_id = ? ORDER BY id ASC LIMIT 50",
-    [channelId],
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: "DB Error" });
-      res.json(rows);
-    }
-  );
+
+  const sql = `
+    SELECT 
+      m.id,
+      m.channel_id,
+      m.sender_id,
+      m.content,
+      m.created_at,
+      m.updated_at,
+      u.name AS sender_name,
+      u.avatar_url
+    FROM messages m
+    JOIN users u ON u.id = m.sender_id
+    WHERE m.channel_id = ?
+    ORDER BY m.id ASC
+    LIMIT 50
+  `;
+
+  db.query(sql, [channelId], (err, rows) => {
+    if (err) return res.status(500).json({ error: "DB Error" });
+    res.json(rows);
+  });
 });
+
 
 // Get members of a specific channel
 router.get("/:channelId/members",(req, res) => {

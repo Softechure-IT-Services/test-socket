@@ -108,6 +108,8 @@ io.on("connection", (socket) => {
           channel_id,
           content,
           sender_id,
+          sender_name,        // ✅ ADDED
+          avatar_url,    
           created_at: new Date().toISOString(),
         };
         // emit to that channel room
