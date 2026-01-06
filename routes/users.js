@@ -14,6 +14,41 @@ router.get("/", (req, res) => {
   );
 });
 
+// Search users (for DM / channels)
+router.get("/search", (req, res) => {
+  const { q = "", exclude } = req.query;
+
+  if (!q.trim()) {
+    return res.json([]);
+  }
+
+  const search = `%${q}%`;
+
+  let query = `
+    SELECT id, name, avatar_url
+    FROM users
+    WHERE name LIKE ?
+  `;
+  const params = [search];
+
+  if (exclude) {
+    query += " AND id != ?";
+    params.push(exclude);
+  }
+
+  query += " ORDER BY name ASC LIMIT 20";
+
+  db.query(query, params, (err, rows) => {
+    if (err) {
+      console.error("User search error:", err);
+      return res.status(500).json({ error: "DB Error" });
+    }
+
+    res.json(rows);
+  });
+});
+
+
 // Get single user
 router.get("/:userId", (req, res) => {
   const { userId } = req.params;
