@@ -14,10 +14,21 @@ const cookieParser = require("cookie-parser");
 const cookie = require("cookie");
 const { verifyOpaqueToken } = require("./utils/tokenAuth");
 
+const jwt = require("jsonwebtoken");
+
+// New
+const path = require("path");
+// New End
+
 const { verifyAccessToken } = require("./utils/jwt");
+const { log } = require("console");
 
 dotenv.config();
 const app = express();
+
+
+app.use(express.static(path.join(__dirname, "public")));
+
 app.use(cookieParser());
 const allowedOrigins = [
   "http://localhost:3000",
@@ -49,8 +60,12 @@ const io = new Server(server, {
   },
 });
 
+// Store user data
+const users = new Map();
+
 
 io.use(async (socket, next) => {
+ 
   try {
     const cookieHeader = socket.handshake.headers.cookie;
     if (!cookieHeader) return next(new Error("Unauthorized"));
@@ -70,7 +85,7 @@ io.use(async (socket, next) => {
     next();
   } catch (err) {
     console.error("❌ Socket auth error:", err.message);
-    next(new Error("Unauthorized"));
+    next(new Error("Unauthorized xsd"));
   }
 });
 
@@ -300,10 +315,211 @@ socket.on("unpinMessage", ({ messageId, channel_id }) => {
 
 
   socket.on("disconnect", () => console.log("User disconnected:", socket.id));
+
+
+
+  // New
+   console.log(`User connected: ${socket.id}`);
+  
+  // Initialize user
+  users.set(socket.id, {
+    id: socket.id,
+    username: null,
+    inCall: false,
+    room: null
+  });
+
+  // Set username
+  socket.on("set-username", username => {
+    const user = users.get(socket.id);
+    if (user) {
+      user.username = username;
+      broadcastUserList();
+    }
+  });
+
+  // Update call status
+  socket.on("update-call-status", inCall => {
+    const user = users.get(socket.id);
+    if (user) {
+      user.inCall = inCall;
+      broadcastUserList();
+    }
+  });
+
+  // Call user
+  socket.on("call-user", ({ to, roomId, callerName }) => {
+    const targetUser = users.get(to);
+    if (targetUser && !targetUser.inCall) {
+      io.to(to).emit("incoming-call", {
+        from: socket.id,
+        roomId,
+        callerName
+      });
+    } else if (targetUser && targetUser.inCall) {
+      socket.emit("call-rejected", { reason: "busy" });
+    }
+  });
+
+  // Call accepted
+  socket.on("call-accepted", ({ to, roomId }) => {
+    io.to(to).emit("call-accepted", { roomId });
+  });
+
+  // Call rejected
+  socket.on("call-rejected", ({ to, reason }) => {
+    io.to(to).emit("call-rejected", { reason });
+  });
+
+  // Join room
+  socket.on("join-room", roomId => {
+    const user = users.get(socket.id);
+    if (user) {
+      user.room = roomId;
+      user.inCall = true;
+    }
+
+    socket.join(roomId);
+    
+    // Get existing users in room with their usernames
+    const roomUsers = Array.from(io.sockets.adapter.rooms.get(roomId) || [])
+      .filter(id => id !== socket.id)
+      .map(id => {
+        const userData = users.get(id);
+        return {
+          id,
+          username: userData?.username || "Anonymous"
+        };
+      });
+
+    // Send existing users to the new joiner
+    socket.emit("existing-users", roomUsers);
+    
+    // Notify others in the room
+    socket.to(roomId).emit("user-joined", {
+      id: socket.id,
+      username: user?.username || "Anonymous"
+    });
+
+    broadcastUserList();
+  });
+
+  // WebRTC signaling
+  socket.on("offer", ({ to, offer }) => {
+    const user = users.get(socket.id);
+    io.to(to).emit("offer", {
+      from: socket.id,
+      offer,
+      username: user?.username || "Anonymous"
+    });
+  });
+
+  socket.on("answer", ({ to, answer }) => {
+    io.to(to).emit("answer", {
+      from: socket.id,
+      answer
+    });
+  });
+
+  socket.on("icecandidate", ({ to, candidate }) => {
+    io.to(to).emit("icecandidate", {
+      from: socket.id,
+      candidate
+    });
+  });
+
+  // Screen share status
+  socket.on("screen-share-status", ({ roomId, sharing }) => {
+    socket.to(roomId).emit("peer-screen-share-status", {
+      userId: socket.id,
+      sharing
+    });
+  });
+
+  // Audio track updated
+  socket.on("audio-track-updated", ({ roomId }) => {
+    console.log(`User ${socket.id} updated audio track in room ${roomId}`);
+    socket.to(roomId).emit("peer-audio-updated", {
+      from: socket.id
+    });
+  });
+
+  // Leave room
+  socket.on("leave-room", roomId => {
+    const user = users.get(socket.id);
+    if (user) {
+      user.inCall = false;
+      user.room = null;
+    }
+
+    socket.leave(roomId);
+    socket.to(roomId).emit("user-left", socket.id);
+    broadcastUserList();
+  });
+
+  // Disconnect
+  socket.on("disconnect", () => {
+    console.log(`User disconnected: ${socket.id}`);
+    
+    const user = users.get(socket.id);
+    if (user && user.room) {
+      socket.to(user.room).emit("user-left", socket.id);
+    }
+
+    users.delete(socket.id);
+    broadcastUserList();
+  });
+
+  // Broadcast updated user list
+  function broadcastUserList() {
+    const userList = Array.from(users.values()).map(user => ({
+      id: user.id,
+      username: user.username,
+      inCall: user.inCall
+    }));
+    io.emit("update-user-list", userList);
+  }
+
+  // Send initial user list
+  broadcastUserList();
+  // New End
 });
 
 // simple API routes
 app.get("/", (req, res) => res.send("Socket.IO Chat Backend Running"));
+
+
+
+app.get("/huddle", (req, res) => {
+  const { meeting_id, user_id, channel_id } = req.query;
+
+  // Get user
+  if (!user_id) {
+    return res.status(400).json({ error: "user_id is required" });
+  }
+
+  db.query(
+  "SELECT * FROM users WHERE id = ? LIMIT 1",
+  [user_id],
+  (err, rows) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ error: "DB Error" });
+    }
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    user = rows[0];
+
+    res.json(user); // return single user
+  } 
+);
+ 
+  res.sendFile(path.join(__dirname, "app", "index.html"));
+});
+
 
 app.get("/messages", (req, res) => {
   // res.send( "This endpoint is under construction." );

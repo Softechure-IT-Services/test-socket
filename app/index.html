@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Call App</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        }
+
+        video {
+            object-fit: contain;
+            background: #000;
+        }
+
+        .video-container {
+            position: relative;
+            overflow: hidden;
+            aspect-ratio: 16/9;
+            width: 100%;
+            height: 100%;
+            transition: all 0.3s ease;
+        }
+
+        .video-container.screen-share {
+            grid-column: 1 / 1;
+            grid-row: 1 / 1;
+            aspect-ratio: 16/9;
+        }
+
+        #videos {
+            display: grid;
+            gap: 8px;
+            height: 100%;
+            width: 100%;
+        }
+
+        #videos.has-screen-share {
+            grid-template-columns: 1fr;
+            grid-template-rows: auto;
+        }
+
+        #videos.has-screen-share .video-container:not(.screen-share) {
+            aspect-ratio: 16/9;
+            max-height: 120px;
+        }
+
+        .thumbnails-container {
+            display: flex;
+            gap: 8px;
+            overflow-x: auto;
+            padding: 4px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+        }
+
+        .thumbnails-container::-webkit-scrollbar {
+            height: 4px;
+        }
+
+        .thumbnails-container::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 2px;
+        }
+
+        .video-label {
+            position: absolute;
+            bottom: 12px;
+            left: 12px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 4px 12px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .screen-share-badge {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background: rgba(59, 130, 246, 0.9);
+            padding: 4px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .device-warning {
+            position: relative;
+        }
+
+        .device-warning::after {
+            content: '!';
+            position: absolute;
+            top: -4px;
+            right: -4px;
+            width: 18px;
+            height: 18px;
+            background: #eab308;
+            color: #000;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: bold;
+            border: 2px solid #111;
+        }
+
+        .device-dropdown {
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            margin-bottom: 8px;
+            background: #1f2937;
+            border: 1px solid #374151;
+            border-radius: 8px;
+            padding: 8px;
+            min-width: 200px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+            z-index: 100;
+        }
+
+        .device-dropdown select {
+            width: 100%;
+            background: #111827;
+            color: white;
+            border: 1px solid #374151;
+            border-radius: 6px;
+            padding: 8px;
+            font-size: 14px;
+        }
+
+        .device-dropdown select:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateY(-100%);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .toast {
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .calling-animation {
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        @media (max-width: 768px) {
+            .sidebar {
+                position: fixed;
+                left: -100%;
+                top: 0;
+                height: 100vh;
+                z-index: 40;
+                transition: left 0.3s ease;
+            }
+
+            .sidebar.open {
+                left: 0;
+            }
+
+            .video-label {
+                font-size: 12px;
+                padding: 3px 8px;
+            }
+
+            #videos.has-screen-share .video-container:not(.screen-share) {
+                max-height: 100px;
+            }
+        }
+    </style>
+</head>
+
+<body class="bg-gray-950 text-white">
+    <div id="toastContainer" class="fixed top-4 right-4 z-50 space-y-2"></div>
+
+    <!-- Username Setup Screen -->
+    <div id="usernameScreen" class="min-h-screen flex items-center justify-center p-4">
+        <div class="bg-gray-900 rounded-2xl shadow-2xl p-8 w-full max-w-md border border-gray-800">
+            <div class="text-center mb-8">
+                <div class="bg-blue-600 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                </div>
+                <h1 class="text-3xl font-bold mb-2">Welcome to Video Call</h1>
+                <p class="text-gray-400">Enter your name to get started</p>
+            </div>
+            <div class="space-y-4">
+                <input id="usernameInput" type="text" placeholder="Your Name"
+                    class="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-white placeholder-gray-500"
+                    maxlength="20">
+                <button id="continueBtn"
+                    class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed">
+                    Continue
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="mainApp" class="hidden h-screen flex flex-col md:flex-row">
+        <!-- Sidebar -->
+        <div id="sidebar" class="sidebar w-full md:w-80 bg-gray-900 border-r border-gray-800 flex flex-col">
+            <div class="p-4 border-b border-gray-800">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <div
+                            class="bg-gradient-to-br from-blue-500 to-purple-600 w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg">
+                            <span id="userInitial"></span>
+                        </div>
+                        <div class="flex-1">
+                            <h3 id="displayUsername" class="font-semibold text-lg"></h3>
+                            <p class="text-xs text-gray-400">Online</p>
+                        </div>
+                    </div>
+                    <button id="closeSidebar" class="md:hidden text-gray-400 hover:text-white">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <div class="p-4 border-b border-gray-800">
+                <h2 class="text-sm font-semibold text-gray-400 mb-3 uppercase tracking-wide">Create Room</h2>
+                <input id="roomInput" type="text" placeholder="Enter Room ID"
+                    class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-white placeholder-gray-500 text-sm mb-2">
+                <button id="createRoomBtn"
+                    class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 rounded-lg transition duration-200">
+                    Create / Join Room
+                </button>
+            </div>
+
+            <div class="flex-1 overflow-y-auto p-4">
+                <h2 class="text-sm font-semibold text-gray-400 mb-3 uppercase tracking-wide">Active Users</h2>
+                <div id="userList" class="space-y-2"></div>
+                <div id="noUsers" class="text-gray-500 text-sm text-center mt-8">
+                    No other users online
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content Area -->
+        <div class="flex-1 flex flex-col min-h-0">
+            <button id="openSidebar"
+                class="md:hidden fixed top-4 left-4 z-30 bg-gray-900 text-white p-3 rounded-full shadow-lg border border-gray-800">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+            </button>
+
+            <!-- Pre-join Screen -->
+            <div id="prejoin" class="flex-1 flex items-center justify-center p-4 md:p-8">
+                <div class="max-w-2xl w-full">
+                    <div class="bg-gray-900 rounded-2xl overflow-hidden shadow-2xl border border-gray-800">
+                        <div class="aspect-video bg-black relative">
+                            <video id="preview" autoplay muted class="w-full h-full"></video>
+                            <div class="absolute bottom-4 left-1/2 transform -translate-x-1/2 flex space-x-3">
+                                <!-- Microphone with dropdown -->
+                                <div class="relative">
+                                    <div id="microphoneDropdown" class="device-dropdown hidden">
+                                        <select id="microphoneSelect" class="text-sm">
+                                            <option value="">Select Microphone</option>
+                                        </select>
+                                    </div>
+                                    <button id="toggleMic"
+                                        class="bg-gray-800 hover:bg-gray-700 w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center transition">
+                                        <svg class="w-4 h-4 md:w-5 md:h-5" fill="currentColor" viewBox="0 0 20 20">
+                                            <path fill-rule="evenodd"
+                                                d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z"
+                                                clip-rule="evenodd" />
+                                        </svg>
+                                    </button>
+                                    <button id="toggleMicDropdown"
+                                        class="absolute -top-1 -right-1 bg-gray-700 hover:bg-gray-600 w-5 h-5 rounded-full flex items-center justify-center transition">
+                                        <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                                            <path fill-rule="evenodd"
+                                                d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+                                                clip-rule="evenodd" />
+                                        </svg>
+                                    </button>
+                                </div>
+                                <!-- Camera with dropdown -->
+                                <div class="relative">
+                                    <div id="cameraDropdown" class="device-dropdown hidden">
+                                        <select id="cameraSelect" class="text-sm">
+                                            <option value="">Select Camera</option>
+                                        </select>
+                                    </div>
+                                    <button id="toggleCam"
+                                        class="bg-gray-800 hover:bg-gray-700 w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center transition">
+                                        <svg class="w-4 h-4 md:w-5 md:h-5" fill="currentColor" viewBox="0 0 20 20">
+                                            <path
+                                                d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z" />
+                                        </svg>
+                                    </button>
+                                    <button id="toggleCamDropdown"
+                                        class="absolute -top-1 -right-1 bg-gray-700 hover:bg-gray-600 w-5 h-5 rounded-full flex items-center justify-center transition">
+                                        <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                                            <path fill-rule="evenodd"
+                                                d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+                                                clip-rule="evenodd" />
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="p-4 md:p-6">
+                            <h2 class="text-xl md:text-2xl font-bold mb-2">Ready to join?</h2>
+                            <p class="text-gray-400 text-sm md:text-base mb-6">Select a user from the sidebar or create
+                                a room</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Meeting Screen -->
+            <div id="meeting" class="hidden flex-1 flex flex-col min-h-0">
+                <div class="flex-1 p-2 md:p-4 overflow-auto">
+                    <div id="videos" class="grid gap-2 md:gap-4 h-full grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+                    </div>
+                </div>
+
+                <!-- Control Bar -->
+                <div class="bg-gray-900 border-t border-gray-800 px-3 md:px-6 py-3 md:py-4">
+                    <div class="device-controls grid grid-cols-2 space-x-4 bg-gray-900 rounded-lg pb-6">
+                        <div>
+                            <label class="block text-sm font-medium">Microphone</label>
+                            <select id="micSelect"
+                                class="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white"></select>
+                        </div>
+                        <div class="!mt-0">
+                            <label class="block text-sm font-medium">Camera</label>
+                            <select id="camSelect"
+                                class="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white"></select>
+                        </div>
+
+                    </div>
+                    <div class="flex items-center justify-between max-w-6xl mx-auto">
+                        <div class="flex items-center space-x-2 flex-1 min-w-0">
+                            <span id="roomName" class="text-xs md:text-sm text-gray-400 font-medium truncate"></span>
+                        </div>
+                        <div class="flex items-center space-x-2 md:space-x-3">
+
+
+                            <button id="refreshDevicesBtn"
+                                class="hidden md:flex bg-gray-800 hover:bg-gray-700 w-12 h-12 rounded-full items-center justify-center transition"
+                                title="Refresh Devices">
+                                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd"
+                                        d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z"
+                                        clip-rule="evenodd" />
+                                </svg>
+                            </button>
+                            <!-- Meeting Microphone with dropdown -->
+                            <div class="relative">
+                                <button id="meetingToggleMic"
+                                    class="bg-gray-800 hover:bg-gray-700 w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center transition">
+                                    <svg class="w-4 h-4 md:w-5 md:h-5" fill="currentColor" viewBox="0 0 20 20">
+                                        <path fill-rule="evenodd"
+                                            d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z"
+                                            clip-rule="evenodd" />
+                                    </svg>
+                                </button>
+                                <button id="meetingToggleMicDropdown"
+                                    class="absolute -top-1 -right-1 bg-gray-700 hover:bg-gray-600 w-5 h-5 rounded-full flex items-center justify-center transition">
+                                    <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                                        <path fill-rule="evenodd"
+                                            d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+                                            clip-rule="evenodd" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <!-- Meeting Camera with dropdown -->
+                            <div class="relative">
+                                <button id="meetingToggleCam"
+                                    class="bg-gray-800 hover:bg-gray-700 w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center transition">
+                                    <svg class="w-4 h-4 md:w-5 md:h-5" fill="currentColor" viewBox="0 0 20 20">
+                                        <path
+                                            d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z" />
+                                    </svg>
+                                </button>
+                                <button id="meetingToggleCamDropdown"
+                                    class="absolute -top-1 -right-1 bg-gray-700 hover:bg-gray-600 w-5 h-5 rounded-full flex items-center justify-center transition">
+                                    <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                                        <path fill-rule="evenodd"
+                                            d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+                                            clip-rule="evenodd" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <button id="shareScreenBtn"
+                                class="hidden md:flex bg-gray-800 hover:bg-gray-700 w-12 h-12 rounded-full items-center justify-center transition">
+                                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd"
+                                        d="M3 5a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2h-2.22l.123.489.804.804A1 1 0 0113 18H7a1 1 0 01-.707-1.707l.804-.804L7.22 15H5a2 2 0 01-2-2V5zm5.771 7H5V5h10v7H8.771z"
+                                        clip-rule="evenodd" />
+                                </svg>
+                            </button>
+                            <button id="leaveBtn"
+                                class="bg-red-600 hover:bg-red-700 px-3 md:px-6 h-10 md:h-12 rounded-full font-semibold transition text-sm md:text-base">
+                                Leave
+                            </button>
+                        </div>
+                        <div class="hidden md:block w-24"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Incoming Call Modal -->
+    <div id="incomingCallModal"
+        class="hidden fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+        <div class="bg-gray-900 rounded-2xl p-8 max-w-md w-full mx-4 border border-gray-800 shadow-2xl">
+            <div class="text-center">
+                <div
+                    class="bg-gradient-to-br from-blue-500 to-purple-600 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 calling-animation">
+                    <span id="callerInitial" class="text-3xl font-bold"></span>
+                </div>
+                <h3 id="callerName" class="text-2xl font-bold mb-2"></h3>
+                <p class="text-gray-400 mb-8">Incoming call...</p>
+                <div class="flex space-x-4">
+                    <button id="rejectCallBtn"
+                        class="flex-1 bg-red-600 hover:bg-red-700 text-white font-semibold py-3 rounded-lg transition duration-200">
+                        Decline
+                    </button>
+                    <button id="acceptCallBtn"
+                        class="flex-1 bg-green-600 hover:bg-green-700 text-white font-semibold py-3 rounded-lg transition duration-200">
+                        Accept
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/js/main.js"></script>
+</body>
+
+</html>
