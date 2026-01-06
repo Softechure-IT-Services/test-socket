@@ -39,6 +39,7 @@ router.get("/:channelId/messages", (req, res) => {
       m.created_at,
       m.updated_at,
       m.pinned,
+      m.reactions,
       u.name AS sender_name,
       u.avatar_url
     FROM messages m

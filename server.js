@@ -80,8 +80,8 @@ io.on("connection", (socket) => {
   socket.emit("auth-success", {
    user: socket.user,
  });
-  socket.on("joinChannel", ({ channelId }) => {
-    socket.join(`channel_${channelId}`);
+  socket.on("joinChannel", ({ channel_id }) => {
+    socket.join(`channel_${channel_id}`);
   });
   socket.on("leaveChannel", ({ channel_id }) => {
   socket.leave(`channel_${channel_id}`);
@@ -231,71 +231,63 @@ socket.on("pinMessage", ({ messageId, channel_id }) => {
   const userId = socket.user.id;
   if (!messageId || !channel_id) return;
 
-  // Check channel and membership if private
-  db.query("SELECT is_private FROM channels WHERE id = ? LIMIT 1", [channel_id], (err, chRows) => {
-    if (err || !chRows.length) return;
-    const channel = chRows[0];
+  db.query(
+    "SELECT is_private FROM channels WHERE id = ? LIMIT 1",
+    [channel_id],
+    (err, chRows) => {
+      if (err || !chRows.length) return;
 
-    const proceed = () => {
-      // Ensure message exists and not already pinned
-      db.query("SELECT pinned FROM messages WHERE id = ? AND channel_id = ? LIMIT 1", [messageId, channel_id], (err2, msgRows) => {
-        if (err2 || !msgRows.length) return;
-        if (msgRows[0].pinned) return;
+      const proceed = () => {
+        db.query(
+          "UPDATE messages SET pinned = 1 WHERE id = ? AND channel_id = ?",
+          [messageId, channel_id],
+          (err2) => {
+            if (err2) return console.error("pinMessage db err", err2);
 
-        db.query("UPDATE messages SET pinned = 1, pinned_by = ?, pinned_at = NOW() WHERE id = ? AND channel_id = ?", [userId, messageId, channel_id], (err3) => {
-          if (err3) return console.error("pinMessage db err", err3);
-          io.to(`channel_${channel_id}`).emit("messagePinned", {
-            messageId,
-            channel_id,
-            pinned_by: userId,
-            pinned_at: new Date().toISOString(),
-          });
-        });
-      });
-    };
+            io.to(`channel_${channel_id}`).emit("messagePinned", {
+              messageId,
+              pinned: true,
+            });
+          }
+        );
+      };
 
-    if (channel.is_private) {
-      db.query("SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ? LIMIT 1", [channel_id, userId], (errm, memRows) => {
-        if (errm || !memRows.length) return;
+      if (chRows[0].is_private) {
+        db.query(
+          "SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ? LIMIT 1",
+          [channel_id, userId],
+          (errm, memRows) => {
+            if (errm || !memRows.length) return;
+            proceed();
+          }
+        );
+      } else {
         proceed();
-      });
-    } else {
-      proceed();
+      }
     }
-  });
+  );
 });
+
 
 // Unpin via socket
 socket.on("unpinMessage", ({ messageId, channel_id }) => {
-  const userId = socket.user.id;
   if (!messageId || !channel_id) return;
 
-  // fetch message and channel creator
-  const sql = `
-    SELECT m.pinned, m.pinned_by, c.created_by
-    FROM messages m
-    JOIN channels c ON c.id = ?
-    WHERE m.id = ? AND m.channel_id = ? LIMIT 1
-  `;
-  db.query(sql, [channel_id, messageId, channel_id], (err, rows) => {
-    if (err || !rows.length) return;
-    const row = rows[0];
-    if (!row.pinned) return;
+  db.query(
+    "UPDATE messages SET pinned = 0 WHERE id = ? AND channel_id = ?",
+    [messageId, channel_id],
+    (err) => {
+      if (err) return console.error("unpin db err", err);
 
-    if (String(row.pinned_by) !== String(userId) && String(row.created_by) !== String(userId)) {
-      // not allowed
-      return;
-    }
-
-    db.query("UPDATE messages SET pinned = 0, pinned_by = NULL, pinned_at = NULL WHERE id = ? AND channel_id = ?", [messageId, channel_id], (err2) => {
-      if (err2) return console.error("unpin db err", err2);
       io.to(`channel_${channel_id}`).emit("messageUnpinned", {
         messageId,
-        channel_id,
+        pinned: false,
       });
-    });
-  });
+    }
+  );
 });
+
+
 
 
 
