@@ -1,10 +1,17 @@
 const { verifyAccessToken } = require("../utils/jwt");
 
-function authenticateCookie(req, res, next) {
-  const token = req.cookies?.access_token;
+function authenticateToken(req, res, next) {
+  // 1️⃣ Check Authorization header first
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ")
+    ? authHeader.split(" ")[1]
+    : null;
+
+  // 2️⃣ If no token in header, fallback to cookie (optional)
+  // const token = req.cookies?.access_token;
 
   if (!token) {
-    return res.status(401).json({ error: "No access token" });
+    return res.status(401).json({ error: "No access token provided" });
   }
 
   try {
@@ -22,4 +29,4 @@ function authenticateCookie(req, res, next) {
   }
 }
 
-module.exports = authenticateCookie;
+module.exports = authenticateToken;
