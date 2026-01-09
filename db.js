@@ -22,15 +22,14 @@ db.connect((err) => {
 module.exports = db;
 
 
-// db.js
 // require("dotenv").config();
 // const mysql = require("mysql2/promise");
 
 // const pool = mysql.createPool({
-//   host: process.env.DB_HOST,
-//   user: process.env.DB_USER,
-//   password: process.env.DB_PASS,
-//   database: process.env.DB_NAME,
+//   host: process.env.DB_HOST || "localhost",
+//   user: process.env.DB_USER || "root",
+//   password: process.env.DB_PASS || "",
+//   database: process.env.DB_NAME || "softech_chat",
 //   port: Number(process.env.DB_PORT) || 3306,
 
 //   waitForConnections: true,
@@ -42,7 +41,7 @@ module.exports = db;
 //   connectTimeout: 10000,
 // });
 
-// // Optional but VERY useful
+// // Debug logs
 // pool.on("connection", () => {
 //   console.log("🟢 MySQL pool connection created");
 // });

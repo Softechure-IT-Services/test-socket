@@ -10,6 +10,10 @@ const threadsRouter = require("./routes/thread");
 const usersRouter = require("./routes/users");
 const authRouter = require("./routes/auth");
 const externalRouter = require("./routes/external");
+const uploadRoutes = require("./routes/upload");
+const dmRoutes = require("./routes/dm");
+
+const supabase = require("./utils/supabase");
 const cookieParser = require("cookie-parser");
 const cookie = require("cookie");
 const { verifyOpaqueToken } = require("./utils/tokenAuth");
@@ -90,13 +94,13 @@ io.on("connection", (socket) => {
   console.log("User Connected:", socket.id, "user:", socket.user && socket.user.id);
 
 
-  socket.on("sendMessage", ({ content, channel_id }) => {
-    if (!channel_id || !content) return;
+  socket.on("sendMessage", ({ content, channel_id,files }) => {
+if (!channel_id || (!content && (!files || !files.length))) return;
     const sender_id = socket.user.id;
 
     db.query(
-      "INSERT INTO messages (`channel_id`, `sender_id`, `content`) VALUES (?, ?, ?)",
-      [channel_id, sender_id, content],
+      "INSERT INTO messages (`channel_id`, `sender_id`, `content`, `files`) VALUES (?, ?, ?, ?)",
+      [channel_id, sender_id, content, JSON.stringify(files || [])],
       (err, result) => {
         if (err) {
           console.error("DB insert error:", err);
@@ -107,6 +111,7 @@ io.on("connection", (socket) => {
           id: result.insertId,
           channel_id,
           content,
+          files: files || [],
           sender_id,
           sender_name: socket.user.name,
           sender_avatar_url: socket.user.avatar_url,
@@ -181,7 +186,7 @@ io.on("connection", (socket) => {
 
 
   socket.on("editMessage", ({ messageId, content, channel_id }) => {
-    if (!messageId || !channel_id || !content) return;
+  if (!messageId || !channel_id || !content) return;
     const editorId = socket.user.id;
     db.query(
       "SELECT sender_id FROM messages WHERE id = ? AND channel_id = ? LIMIT 1",
@@ -212,20 +217,59 @@ io.on("connection", (socket) => {
   });
 
 
-  socket.on("deleteMessage", ({ id }) => {
-    if (!id) return;
-    const userId = socket.user.id;
-    // verify ownership before deleting
-    db.query("SELECT sender_id, channel_id FROM messages WHERE id = ? LIMIT 1", [id], (err, rows) => {
+socket.on("deleteMessage", ({ id }) => {
+  if (!id) return;
+  const userId = socket.user.id;
+
+  // 1. Fetch message including files
+  db.query(
+    "SELECT sender_id, channel_id, files FROM messages WHERE id = ? LIMIT 1",
+    [id],
+    async (err, rows) => {
       if (err || !rows.length) return;
       if (String(rows[0].sender_id) !== String(userId)) return;
+
       const channel_id = rows[0].channel_id;
+
+      // 2. Parse files JSON
+      let files = [];
+      try {
+        files = JSON.parse(rows[0].files || "[]");
+      } catch (e) {
+        files = [];
+      }
+
+      // 3. Delete files from Supabase storage
+      if (Array.isArray(files) && files.length > 0) {
+        const paths = files
+          .map((f) => f.path)
+          .filter(Boolean);
+
+        if (paths.length > 0) {
+          const { error } = await supabase.storage
+            .from("images")
+            .remove(paths);
+
+          if (error) {
+            console.error("❌ Supabase delete error:", error);
+            // We continue anyway to avoid zombie messages
+          } else {
+            console.log("🧹 Deleted files from storage:", paths);
+          }
+        }
+      }
+
+      // 4. Delete message from DB
       db.query("DELETE FROM messages WHERE id = ?", [id], (err2) => {
         if (err2) return;
+
+        // 5. Notify clients
         io.to(`channel_${channel_id}`).emit("messageDeleted", { id });
       });
-    });
-  });
+    }
+  );
+});
+
 
 
 // Pin via socket
@@ -317,5 +361,8 @@ app.use("/users", usersRouter);
 app.use("/threads", threadsRouter);
 app.use("/auth", authRouter);
 app.use("/external", externalRouter);
+app.use("/upload", uploadRoutes);
+app.use("/dm", dmRoutes);
+
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log("Server running on port", PORT));
