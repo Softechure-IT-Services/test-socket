@@ -71,7 +71,7 @@ const io = new Server(server, {
 io.use(async (socket, next) => {
   try {
     const cookieHeader = socket.handshake.auth.token;
-    // console.log(socket);
+    console.log(socket);
     if (!cookieHeader) return next(new Error("Unauthorized1"));
     const cookies = cookie.parse(cookieHeader);
 
