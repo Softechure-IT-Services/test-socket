@@ -76,6 +76,9 @@ router.post("/with/:otherUserId", (req, res) => {
  * List my DMs
  */
 router.get("/", (req, res) => {
+
+  console.log(req.headers.cookie);
+
   const userId = req.user.id;
 
   const sql = `
