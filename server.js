@@ -60,8 +60,9 @@ io.use(async (socket, next) => {
   try {
     const cookieHeader = socket.handshake.headers.cookie;
     if (!cookieHeader) return next(new Error("Unauthorized"));
-
+console.log(cookieHeader);
     const cookies = cookie.parse(cookieHeader);
+
     const token = cookies.access_token;
 
     if (!token) return next(new Error("Unauthorized"));
