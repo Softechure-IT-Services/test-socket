@@ -31,12 +31,18 @@ const allowedOrigins = [
   "https://test-socket-client-steel.vercel.app",
   process.env.CLIENT_URL,
 ].filter(Boolean);
-app.use(
-  cors({
-    origin: allowedOrigins,
-    credentials: true,
-  })
-);
+// app.use(
+//   cors({
+//     origin: allowedOrigins,
+//     credentials: true,
+//   })
+// );
+
+app.use(cors({
+  origin: "https://test-socket-client-steel.vercel.app",
+  credentials: true,
+}));
+
 app.use(express.json());
 
 const server = http.createServer(app);
@@ -46,14 +52,20 @@ const server = http.createServer(app);
 //   path: "/socket.io",    
 // });
 
+// const io = new Server(server, {
+//   cors: {
+//     origin: allowedOrigins, // only frontend domain
+//     credentials: true,
+//   },
+//   transports: ["websocket"], // force WebSocket
+// });
+
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins, // only frontend domain
+    origin: "https://test-socket-client-steel.vercel.app",
     credentials: true,
   },
-  transports: ["websocket"], // force WebSocket
 });
-
 
 
 io.use(async (socket, next) => {

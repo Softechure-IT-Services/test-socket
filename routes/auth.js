@@ -18,7 +18,6 @@ const accessCookieOptions = {
   secure: isProd ? true : false,
   sameSite: isProd ? "none" : "lax",
   maxAge:  7 * 24 * 60 * 60 * 1000,
-  path: "/", // good practice
 };
 const refreshCookieOptions = {
   httpOnly: true,
@@ -26,7 +25,6 @@ const refreshCookieOptions = {
   secure: isProd ? true : false,
   sameSite: isProd ? "none" : "lax",
   maxAge: 7 * 24 * 60 * 60 * 1000,
-    path: "/", // good practice
 };
 // const accessCookieOptions = {
 //   maxAge:  7 * 24 * 60 * 60 * 1000,

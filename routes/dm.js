@@ -77,7 +77,7 @@ router.post("/with/:otherUserId", (req, res) => {
  */
 router.get("/", (req, res) => {
 
-  console.log(req.headers.cookie);
+  // console.log(req.headers.cookie);
 
   const userId = req.user.id;
 
