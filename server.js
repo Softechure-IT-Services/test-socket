@@ -48,10 +48,12 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin: allowedOrigins, // only frontend domain
     credentials: true,
   },
+  transports: ["websocket"], // force WebSocket
 });
+
 
 
 io.use(async (socket, next) => {

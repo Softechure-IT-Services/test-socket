@@ -13,32 +13,35 @@ const jwt = require("jsonwebtoken");
 
 // cookie options helpers
 const isProd = process.env.NODE_ENV === "production";
-// const accessCookieOptions = {
-//   secure: isProd,
-//   sameSite: isProd ? "none" : "lax",
-//   sameSite:"none",
-//   maxAge: 15 * 60 * 1000,
-// };
-// const refreshCookieOptions = {
-//   secure: isProd,
-//   sameSite: isProd ? "none" : "lax",
-//   sameSite:"none",
-//   maxAge: 7 * 24 * 60 * 60 * 1000,
-// };
 const accessCookieOptions = {
-  maxAge:  7 * 24 * 60 * 60 * 1000,
   httpOnly: true,
-  sameSite: "lax", // 🔥 REQUIRED for cross-origin
-  secure: false, // MUST be false on localhost
+  secure: isProd ? true : false,
+  sameSite: isProd ? "none" : "lax",
+  maxAge:  7 * 24 * 60 * 60 * 1000,
   path: "/", // good practice
 };
 const refreshCookieOptions = {
-  maxAge: 7 * 24 * 60 * 60 * 1000,
   httpOnly: true,
-  sameSite: "lax", // 🔥 REQUIRED for cross-origin
-  secure: false, // MUST be false on localhost
-  path: "/", // good practice
+  secure: isProd,
+  secure: isProd ? true : false,
+  sameSite: isProd ? "none" : "lax",
+  maxAge: 7 * 24 * 60 * 60 * 1000,
+    path: "/", // good practice
 };
+// const accessCookieOptions = {
+//   maxAge:  7 * 24 * 60 * 60 * 1000,
+//   httpOnly: true,
+//   sameSite: "lax", // 🔥 REQUIRED for cross-origin
+//   secure: false, // MUST be false on localhost
+//   path: "/", // good practice
+// };
+// const refreshCookieOptions = {
+//   maxAge: 7 * 24 * 60 * 60 * 1000,
+//   httpOnly: true,
+//   sameSite: "lax", // 🔥 REQUIRED for cross-origin
+//   secure: false, // MUST be false on localhost
+//   path: "/", // good practice
+// };
 
 // Helper: save refresh token hash to DB (hash before saving)
 const crypto = require("crypto");
