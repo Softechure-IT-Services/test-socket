@@ -135,6 +135,8 @@ res.cookie("username", user.name || "", { sameSite: isProd ? "none" : "lax", sec
         message: "Login successful",
         user: {
           id: user.id,
+          access_token: accessToken,
+          refresh_token: refreshToken,
           name: user.name,
           email: user.email,
           avatar_url: user.avatar_url,
