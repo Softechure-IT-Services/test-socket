@@ -75,7 +75,7 @@ io.use(async (socket, next) => {
     if (!cookieHeader) return next(new Error("Unauthorized1"));
     const cookies = cookie.parse(cookieHeader);
 
-    const token = cookies.access_token;
+    const token = cookieHeader;
 
     if (!token) return next(new Error("Unauthorized2"));
 
