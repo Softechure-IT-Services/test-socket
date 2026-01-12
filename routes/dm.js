@@ -27,7 +27,7 @@ router.post("/with/:otherUserId", (req, res) => {
   `;
 
   db.query(checkSql, [userId, otherUserId], (err, rows) => {
-    if (err) return res.status(500).json({ error: err });
+    if (err) return res.status(500).json({ error: err.message });
 
     if (rows.length) {
       // ✅ DM already exists
