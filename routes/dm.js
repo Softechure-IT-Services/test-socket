@@ -76,26 +76,32 @@ router.post("/with/:otherUserId", async (req, res) => {
 /**
  * List my DMs
  */
-router.get("/", (req, res) => {
+router.get("/", async (req, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
-  // console.log(req.headers.cookie);
-
-  const userId = req.user.id;
-
-  const sql = `
-    SELECT c.id, u.id as other_user_id, u.name, u.avatar_url
-    FROM channels c
-    JOIN channel_members me ON me.channel_id = c.id AND me.user_id = ?
-    JOIN channel_members other ON other.channel_id = c.id AND other.user_id != ?
-    JOIN users u ON u.id = other.user_id
-    WHERE c.is_dm = 1
-    ORDER BY c.id DESC
-  `;
-
-  db.query(sql, [userId, userId], (err, rows) => {
-    if (err) return res.status(500).json({ error: "DB Error" });
-    res.json(rows);
-  });
+  try {
+    const sql = `
+      SELECT c.id, c.name, c.is_private, c.is_dm
+      FROM channels c
+      JOIN channel_members m ON m.channel_id = c.id
+      WHERE m.user_id = ?
+      AND ? = false OR c.is_dm = 0
+      ORDER BY c.id DESC
+    `;
+    db.query(sql, [userId, req.query.get_dms === "true"], (err, rows) => {
+      if (err) {
+        console.error("Channels fetch error:", err);
+        return res.status(500).json({ error: "DB Error" });
+      }
+      res.json(rows);
+    });
+  } catch (err) {
+    console.error("Channels route error:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
+
+
 
 module.exports = router;
