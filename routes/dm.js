@@ -30,47 +30,67 @@ router.post("/with/:otherUserId", (req, res) => {
     if (err) return res.status(500).json({ error: err.message });
 
     if (rows.length) {
-      // ✅ DM already exists
       return res.json({ dm_id: rows[0].id });
     }
 
-    // 2️⃣ Create new DM channel
-    db.beginTransaction((err) => {
-      if (err) return res.status(500).json({ error: "Transaction error" });
+    // 2️⃣ Create new DM channel using a connection
+    db.getConnection((err, connection) => {
+      if (err) return res.status(500).json({ error: "DB connection error" });
 
-      db.query(
-        "INSERT INTO channels (name, is_private, is_dm, created_by) VALUES (?, 1, 1, ?)",
-        ["DM", userId],
-        (err2, result) => {
-          if (err2) {
-            return db.rollback(() => res.status(500).json({ error: "Create DM failed" }));
-          }
+      connection.beginTransaction((err) => {
+        if (err) {
+          connection.release();
+          return res.status(500).json({ error: "Transaction error" });
+        }
 
-          const channelId = result.insertId;
-
-          const members = [
-            [channelId, userId],
-            [channelId, otherUserId],
-          ];
-
-          db.query(
-            "INSERT INTO channel_members (channel_id, user_id) VALUES ?",
-            [members],
-            (err3) => {
-              if (err3) {
-                return db.rollback(() => res.status(500).json({ error: "Add members failed" }));
-              }
-
-              db.commit(() => {
-                res.json({ dm_id: channelId });
+        connection.query(
+          "INSERT INTO channels (name, is_private, is_dm, created_by) VALUES (?, 1, 1, ?)",
+          ["DM", userId],
+          (err2, result) => {
+            if (err2) {
+              return connection.rollback(() => {
+                connection.release();
+                res.status(500).json({ error: "Create DM failed" });
               });
             }
-          );
-        }
-      );
+
+            const channelId = result.insertId;
+            const members = [
+              [channelId, userId],
+              [channelId, otherUserId],
+            ];
+
+            connection.query(
+              "INSERT INTO channel_members (channel_id, user_id) VALUES ?",
+              [members],
+              (err3) => {
+                if (err3) {
+                  return connection.rollback(() => {
+                    connection.release();
+                    res.status(500).json({ error: "Add members failed" });
+                  });
+                }
+
+                connection.commit((err4) => {
+                  if (err4) {
+                    return connection.rollback(() => {
+                      connection.release();
+                      res.status(500).json({ error: "Commit failed" });
+                    });
+                  }
+
+                  connection.release();
+                  res.json({ dm_id: channelId });
+                });
+              }
+            );
+          }
+        );
+      });
     });
   });
 });
+
 
 /**
  * List my DMs
