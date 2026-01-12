@@ -109,35 +109,49 @@ io.on("connection", (socket) => {
   console.log("User Connected:", socket.id, "user:", socket.user && socket.user.id);
 
 
-  socket.on("sendMessage", ({ content, channel_id,files }) => {
-if (!channel_id || (!content && (!files || !files.length))) return;
-    const sender_id = socket.user.id;
+ socket.on("sendMessage", ({ content, channel_id, files }) => {
+  if (!channel_id || (!content && (!files || !files.length))) return;
+  const sender_id = socket.user.id;
 
-    db.query(
-      "INSERT INTO messages (`channel_id`, `sender_id`, `content`, `files`) VALUES (?, ?, ?, ?)",
-      [channel_id, sender_id, content, JSON.stringify(files || [])],
-      (err, result) => {
-        if (err) {
-          console.error("DB insert error:", err);
-          socket.emit("messageError", { error: err.message });
-          return;
-        }
-        const payload = {
-          id: result.insertId,
-          channel_id,
-          content,
-          files: files || [],
-          sender_id,
-          sender_name: socket.user.name,
-          sender_avatar_url: socket.user.avatar_url,
-          created_at: new Date().toISOString(),
-        };
-        // emit to that channel room
-        io.to(`channel_${channel_id}`).emit("receiveMessage", payload);
-        socket.emit("messageAck", payload);
+  db.query(
+    "INSERT INTO messages (`channel_id`, `sender_id`, `content`, `files`) VALUES (?, ?, ?, ?)",
+    [channel_id, sender_id, content, JSON.stringify(files || [])],
+    (err, result) => {
+      if (err) {
+        console.error("DB insert error:", err);
+        socket.emit("messageError", { error: err.message });
+        return;
       }
-    );
-  });
+
+      // 🔥 Fetch the row DB actually saved (with correct created_at)
+      db.query(
+        "SELECT id, channel_id, sender_id, content, files, created_at, updated_at FROM messages WHERE id = ?",
+        [result.insertId],
+        (err2, rows) => {
+          if (err2 || !rows.length) return;
+
+          const row = rows[0];
+
+          const payload = {
+            id: row.id,
+            channel_id: row.channel_id,
+            content: row.content,
+            files: JSON.parse(row.files || "[]"),
+            sender_id: row.sender_id,
+            sender_name: socket.user.name,
+            avatar_url: socket.user.avatar_url,
+            created_at: row.created_at,   // ✅ FROM DB
+            updated_at: row.updated_at,   // ✅ FROM DB
+          };
+
+          io.to(`channel_${channel_id}`).emit("receiveMessage", payload);
+          socket.emit("messageAck", payload);
+        }
+      );
+    }
+  );
+});
+
 
  socket.on("reactMessage", ({ messageId, emoji }) => {
     if (!messageId || !emoji) return;
@@ -213,20 +227,23 @@ if (!channel_id || (!content && (!files || !files.length))) return;
         db.query(
           "UPDATE messages SET content = ?, updated_at = NOW() WHERE id = ? AND channel_id = ?",
           [content, messageId, channel_id],
-          (err2) => {
-            if (err2) {
-              console.error("Edit save error:", err2);
-              return;
-            }
-            const payload = {
-              id: messageId,
-              content,
-              channel_id,
-              updated_at: new Date().toISOString(),
-            };
-            io.to(`channel_${channel_id}`).emit("messageEdited", payload);
+          () => {
+            db.query(
+              "SELECT updated_at FROM messages WHERE id = ?",
+              [messageId],
+              (e, rows) => {
+                const payload = {
+                  id: messageId,
+                  content,
+                  channel_id,
+                  updated_at: rows[0].updated_at, // ✅ FROM DB
+                };
+                io.to(`channel_${channel_id}`).emit("messageEdited", payload);
+              }
+            );
           }
         );
+
       }
     );
   });

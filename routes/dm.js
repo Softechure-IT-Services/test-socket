@@ -82,13 +82,25 @@ router.get("/", async (req, res) => {
 
   try {
     const sql = `
-      SELECT c.id, c.name, c.is_private, c.is_dm
+      SELECT 
+        c.id,
+        u.id AS other_user_id,
+        u.name AS name,          -- 👈 THIS becomes the channel "name"
+        u.avatar_url,
+        c.is_private,
+        c.is_dm
       FROM channels c
-      JOIN channel_members m ON m.channel_id = c.id
-      WHERE m.user_id = ? AND c.is_dm = 1
+      JOIN channel_members me 
+        ON me.channel_id = c.id AND me.user_id = ?
+      JOIN channel_members other 
+        ON other.channel_id = c.id AND other.user_id != ?
+      JOIN users u 
+        ON u.id = other.user_id
+      WHERE c.is_dm = 1
       ORDER BY c.id DESC
     `;
-    db.query(sql, [userId], (err, rows) => {
+
+    db.query(sql, [userId, userId], (err, rows) => {
       if (err) {
         console.error("DM fetch error:", err);
         return res.status(500).json({ error: "DB Error" });
@@ -100,6 +112,7 @@ router.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 
 
