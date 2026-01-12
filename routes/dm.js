@@ -8,7 +8,7 @@ router.use(verifyToken);
 /**
  * Create or get existing DM between two users
  */
-router.post("/with/:otherUserId", (req, res) => {
+router.post("/with/:otherUserId", async (req, res) => {
   const userId = req.user.id;
   const otherUserId = Number(req.params.otherUserId);
 
@@ -16,80 +16,61 @@ router.post("/with/:otherUserId", (req, res) => {
     return res.status(400).json({ error: "Invalid user" });
   }
 
-  // 1️⃣ Check if DM already exists
-  const checkSql = `
-    SELECT c.id
-    FROM channels c
-    JOIN channel_members m1 ON m1.channel_id = c.id AND m1.user_id = ?
-    JOIN channel_members m2 ON m2.channel_id = c.id AND m2.user_id = ?
-    WHERE c.is_dm = 1
-    LIMIT 1
-  `;
-
-  db.query(checkSql, [userId, otherUserId], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
+  try {
+    // 1️⃣ Check if DM already exists
+    const [rows] = await db.pool.query(
+      `
+      SELECT c.id
+      FROM channels c
+      JOIN channel_members m1 ON m1.channel_id = c.id AND m1.user_id = ?
+      JOIN channel_members m2 ON m2.channel_id = c.id AND m2.user_id = ?
+      WHERE c.is_dm = 1
+      LIMIT 1
+      `,
+      [userId, otherUserId]
+    );
 
     if (rows.length) {
       return res.json({ dm_id: rows[0].id });
     }
 
-    // 2️⃣ Create new DM channel using a connection
-    db.getConnection((err, connection) => {
-      if (err) return res.status(500).json({ error: "DB connection error" });
+    // 2️⃣ Start transaction
+    const connection = await db.pool.getConnection();
+    try {
+      await connection.beginTransaction();
 
-      connection.beginTransaction((err) => {
-        if (err) {
-          connection.release();
-          return res.status(500).json({ error: "Transaction error" });
-        }
+      const [result] = await connection.query(
+        "INSERT INTO channels (name, is_private, is_dm, created_by) VALUES (?, 1, 1, ?)",
+        ["DM", userId]
+      );
 
-        connection.query(
-          "INSERT INTO channels (name, is_private, is_dm, created_by) VALUES (?, 1, 1, ?)",
-          ["DM", userId],
-          (err2, result) => {
-            if (err2) {
-              return connection.rollback(() => {
-                connection.release();
-                res.status(500).json({ error: "Create DM failed" });
-              });
-            }
+      const channelId = result.insertId;
 
-            const channelId = result.insertId;
-            const members = [
-              [channelId, userId],
-              [channelId, otherUserId],
-            ];
+      const members = [
+        [channelId, userId],
+        [channelId, otherUserId],
+      ];
 
-            connection.query(
-              "INSERT INTO channel_members (channel_id, user_id) VALUES ?",
-              [members],
-              (err3) => {
-                if (err3) {
-                  return connection.rollback(() => {
-                    connection.release();
-                    res.status(500).json({ error: "Add members failed" });
-                  });
-                }
+      await connection.query(
+        "INSERT INTO channel_members (channel_id, user_id) VALUES ?",
+        [members]
+      );
 
-                connection.commit((err4) => {
-                  if (err4) {
-                    return connection.rollback(() => {
-                      connection.release();
-                      res.status(500).json({ error: "Commit failed" });
-                    });
-                  }
+      await connection.commit();
+      connection.release();
 
-                  connection.release();
-                  res.json({ dm_id: channelId });
-                });
-              }
-            );
-          }
-        );
-      });
-    });
-  });
+      res.json({ dm_id: channelId });
+    } catch (err) {
+      await connection.rollback();
+      connection.release();
+      throw err;
+    }
+  } catch (err) {
+    console.error("DM creation error:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
+
 
 
 /**
