@@ -85,19 +85,18 @@ router.get("/", async (req, res) => {
       SELECT c.id, c.name, c.is_private, c.is_dm
       FROM channels c
       JOIN channel_members m ON m.channel_id = c.id
-      WHERE m.user_id = ?
-      AND ? = false OR c.is_dm = 0
+      WHERE m.user_id = ? AND c.is_dm = 1
       ORDER BY c.id DESC
     `;
-    db.query(sql, [userId, req.query.get_dms === "true"], (err, rows) => {
+    db.query(sql, [userId], (err, rows) => {
       if (err) {
-        console.error("Channels fetch error:", err);
+        console.error("DM fetch error:", err);
         return res.status(500).json({ error: "DB Error" });
       }
       res.json(rows);
     });
   } catch (err) {
-    console.error("Channels route error:", err);
+    console.error("DM route error:", err);
     res.status(500).json({ error: err.message });
   }
 });
