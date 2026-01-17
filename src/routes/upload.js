@@ -1,9 +1,14 @@
-const express = require("express");
-const multer = require("multer");
-const crypto = require("crypto");
-const path = require("path");
-const supabase = require("../utils/supabase");
+// const express = require("express");
+// const multer = require("multer");
+// const crypto = require("crypto");
+// const path = require("path");
+// const supabase = require("../utils/supabase");
 
+import express from "express";
+import multer from "multer";
+import crypto from "crypto";
+import path from "path";
+import supabase from "../utils/supabase.js";
 const router = express.Router();
 
 /* ---------- SECURITY ---------- */
@@ -105,4 +110,4 @@ router.post("/delete", async (req, res) => {
   }
 });
 
-module.exports = router;
+export default router;

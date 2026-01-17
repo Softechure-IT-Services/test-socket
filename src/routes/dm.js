@@ -1,7 +1,13 @@
-const express = require("express");
+// const express = require("express");
+// const router = express.Router();
+// const db = require("../db");
+// const verifyToken = require("../middleware/auth");
+
+
+import express from "express";
 const router = express.Router();
-const db = require("../db");
-const verifyToken = require("../middleware/auth");
+import db from "../config/db.js";
+import verifyToken from "../middleware/auth.js";
 
 router.use(verifyToken);
 
@@ -116,4 +122,4 @@ router.get("/", async (req, res) => {
 
 
 
-module.exports = router;
+export default router;

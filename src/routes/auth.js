@@ -1,15 +1,31 @@
 // routes/auth.js
-const express = require("express");
+// const express = require("express");
+// const router = express.Router();
+// const db = require("../db");
+// const bcrypt = require("bcrypt");
+// const {
+//   generateAccessToken,
+//   generateRefreshToken,
+//   verifyRefreshToken,
+// } = require("../utils/jwt");
+// const EXTERNAL_SECRET = process.env.EXTERNAL_AUTH_SECRET;
+// const jwt = require("jsonwebtoken");
+
+
+// new
+import express from "express";
 const router = express.Router();
-const db = require("../db");
-const bcrypt = require("bcrypt");
-const {
+import db from "../config/db.js";
+import bcrypt from "bcrypt";
+import {
   generateAccessToken,
   generateRefreshToken,
   verifyRefreshToken,
-} = require("../utils/jwt");
-const EXTERNAL_SECRET = process.env.EXTERNAL_AUTH_SECRET;
-const jwt = require("jsonwebtoken");
+} from "../utils/jwt.js";
+// const EXTERNAL_SECRET = process.env.EXTERNAL_AUTH_SECRET;
+// import jwt from "jsonwebtoken";
+import crypto from "crypto";
+// new end
 
 // cookie options helpers
 const isProd = process.env.NODE_ENV === "production";
@@ -42,7 +58,7 @@ const refreshCookieOptions = {
 // };
 
 // Helper: save refresh token hash to DB (hash before saving)
-const crypto = require("crypto");
+// const crypto = require("crypto");
 function hashToken(t) {
   return crypto.createHash("sha256").update(t).digest("hex");
 }
@@ -222,4 +238,4 @@ router.post("/logout", (req, res) => {
   res.json({ message: "Logged out" });
 });
 
-module.exports = router;
+export default router;

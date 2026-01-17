@@ -1,10 +1,9 @@
-// utils/jwt.js
-const jwt = require("jsonwebtoken");
+import jwt from "jsonwebtoken";
 
 const ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || "access-secret-key";
 const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || "refresh-secret-key";
 
-function generateAccessToken(user) {
+export function generateAccessToken(user) {
   return jwt.sign(
     { id: user.id, name: user.name, email: user.email },
     ACCESS_SECRET,
@@ -12,7 +11,7 @@ function generateAccessToken(user) {
   );
 }
 
-function generateRefreshToken(user) {
+export function generateRefreshToken(user) {
   return jwt.sign(
     { id: user.id, name: user.name, email: user.email },
     REFRESH_SECRET,
@@ -20,12 +19,47 @@ function generateRefreshToken(user) {
   );
 }
 
-function verifyAccessToken(token) {
+export function verifyAccessToken(token) {
   return jwt.verify(token, ACCESS_SECRET);
 }
 
-function verifyRefreshToken(token) {
+export function verifyRefreshToken(token) {
   return jwt.verify(token, REFRESH_SECRET);
 }
 
-module.exports = { generateAccessToken, generateRefreshToken, verifyAccessToken, verifyRefreshToken };
+
+
+
+// // utils/jwt.js
+// // const jwt = require("jsonwebtoken");
+// import jwt from "jsonwebtoken";
+
+// const ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || "access-secret-key";
+// const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || "refresh-secret-key";
+
+// function generateAccessToken(user) {
+//   return jwt.sign(
+//     { id: user.id, name: user.name, email: user.email },
+//     ACCESS_SECRET,
+//     { expiresIn: "30d" }
+//   );
+// }
+
+// function generateRefreshToken(user) {
+//   return jwt.sign(
+//     { id: user.id, name: user.name, email: user.email },
+//     REFRESH_SECRET,
+//     { expiresIn: "7d" }
+//   );
+// }
+
+// function verifyAccessToken(token) {
+//   return jwt.verify(token, ACCESS_SECRET);
+// }
+
+// function verifyRefreshToken(token) {
+//   return jwt.verify(token, REFRESH_SECRET);
+// }
+
+
+// export default  { generateAccessToken, generateRefreshToken, verifyAccessToken, verifyRefreshToken };

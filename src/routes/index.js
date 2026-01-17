@@ -1,0 +1,8 @@
+export { default as channelRoutes } from "./channel.js";
+export { default as searchRouter } from "./search.js";
+export { default as threadsRouter } from "./thread.js";
+export { default as usersRouter } from "./users.js";
+export { default as authRouter } from "./auth.js";
+export { default as externalRouter } from "./external.js";
+export { default as uploadRoutes } from "./upload.js";
+export { default as dmRoutes } from "./dm.js";
