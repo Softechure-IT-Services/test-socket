@@ -1,200 +1,118 @@
-// const express = require("express");
-// const router = express.Router();
-// const db = require("../db");
-// const verifyToken = require("../middleware/auth");
-
 import express from "express";
+import verifyToken from "../middleware/auth.js";
+
 const router = express.Router();
-import db from "../config/db.js";
-// import verifyToken from "../middleware/auth.js";
+import {
+  getAllUsers,
+  getUserById,
+  searchUsers,
+  createUser,
+  updateUser,
+  setUserOnlineStatus,
+  getUserChannels,
+  getUserMessages,
+} from "../controllers/user.controller.js";
 
 // Get all users
-router.get("/", (req, res) => {
-  db.query(
-    "SELECT id, external_id, name, email, avatar_url, is_online, last_seen, created_at, updated_at FROM users",
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: "DB Error" });
-      res.json(rows);
-    }
-  );
+router.get("/", verifyToken, async (req, res) => {
+  try {
+    const users = await getAllUsers();
+    res.json(users);
+  } catch (err) {
+    console.error("Prisma error:", err);
+    res.status(500).json({ error: "DB Error" });
+  }
 });
 
-// Search users (for DM / channels)
-router.get("/search", (req, res) => {
-  const { q = "", exclude } = req.query;
-
-  if (!q.trim()) {
-    return res.json([]);
+// Search users
+router.get("/search", verifyToken, async (req, res) => {
+  try {
+    const { q = "", exclude } = req.query;
+    if (!q.trim()) return res.json([]);
+    const users = await searchUsers(q, exclude);
+    res.json(users);
+  } catch (err) {
+    console.error("Prisma error:", err);
+    res.status(500).json({ error: "DB Error" });
   }
-
-  const search = `%${q}%`;
-
-  let query = `
-    SELECT id, name, avatar_url
-    FROM users
-    WHERE name LIKE ?
-  `;
-  const params = [search];
-
-  if (exclude) {
-    query += " AND id != ?";
-    params.push(exclude);
-  }
-
-  query += " ORDER BY name ASC LIMIT 20";
-
-  db.query(query, params, (err, rows) => {
-    if (err) {
-      console.error("User search error:", err);
-      return res.status(500).json({ error: "DB Error" });
-    }
-
-    res.json(rows);
-  });
 });
-
 
 // Get single user
-router.get("/:userId", (req, res) => {
-  const { userId } = req.params;
-
-  db.query(
-    "SELECT id, external_id, name, email, avatar_url, is_online, last_seen, created_at, updated_at FROM users WHERE id = ?",
-    [userId],
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: "DB Error" });
-      if (!rows.length) return res.status(404).json({ error: "User not found" });
-
-      res.json(rows[0]);
-    }
-  );
+router.get("/:userId", async (req, res) => {
+  try {
+    const user = await getUserById(req.params.userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+    res.json(user);
+  } catch (err) {
+    console.error("Prisma error:", err);
+    res.status(500).json({ error: "DB Error" });
+  }
 });
 
 // Create user
-router.post("/", (req, res) => {
-  const body = req.body;
-
-  if (!body || typeof body !== "object") {
-    return res.status(400).json({ error: "Invalid or missing JSON body" });
+router.post("/", async (req, res) => {
+  try {
+    const user = await createUser(req.body);
+    res.status(201).json(user);
+  } catch (err) {
+    console.error("Prisma error:", err);
+    res.status(500).json({ error: "DB Error" });
   }
-  const { external_id, name, email, avatar_url } = body;
-
-  const missing = [];
-  // if (!external_id) missing.push("external_id");
-  if (!name) missing.push("name");
-  if (!email) missing.push("email");
-
-  if (missing.length > 0) {
-    return res.status(400).json({ error: `Missing fields: ${missing.join(", ")}` });
-  }
-
-
-  const query = `
-    INSERT INTO users (external_id, name, email, avatar_url, is_online, last_seen, created_at, updated_at)
-    VALUES (?, ?, ?, ?, 0, NOW(), NOW(), NOW())
-  `;
-
-  db.query(query, [external_id, name, email, avatar_url], (err, result) => {
-    if (err) return res.status(500).json({ error: `DB error: ${err.message}` });
-
-    res.json({
-      id: result.insertId,
-      external_id,
-      name,
-      email,
-      avatar_url,
-      is_online: 0,
-      last_seen: new Date(),
-    });
-  });
 });
 
 // Update user
-router.put("/:userId", (req, res) => {
-  const { userId } = req.params;
-  const { name, email, avatar_url } = req.body;
-
-  const query = `
-    UPDATE users SET 
-      name = ?, 
-      email = ?, 
-      avatar_url = ?, 
-      updated_at = NOW()
-    WHERE id = ?
-  `;
-
-  db.query(query, [name, email, avatar_url, userId], (err) => {
-    if (err) return res.status(500).json({ error: "DB Error" });
-
-    res.json({
-      id: userId,
-      name,
-      email,
-      avatar_url,
-    });
-  });
+router.put("/:userId", async (req, res) => {
+  try {
+    const user = await updateUser(req.params.userId, req.body);
+    res.json(user);
+  } catch (err) {
+    console.error("Prisma error:", err);
+    res.status(500).json({ error: "DB Error" });
+  }
 });
 
 // Set user online
-router.post("/:userId/online", (req, res) => {
-  const { userId } = req.params;
-
-  db.query(
-    "UPDATE users SET is_online = 1, last_seen = NOW(), updated_at = NOW() WHERE id = ?",
-    [userId],
-    (err) => {
-      if (err) return res.status(500).json({ error: "DB Error" });
-      res.json({ id: userId, is_online: 1 });
-    }
-  );
+router.post("/:userId/online", async (req, res) => {
+  try {
+    const user = await setUserOnlineStatus(req.params.userId, true);
+    res.json(user);
+  } catch (err) {
+    console.error("Prisma error:", err);
+    res.status(500).json({ error: "DB Error" });
+  }
 });
 
 // Set user offline
-router.post("/:userId/offline", (req, res) => {
-  const { userId } = req.params;
-
-  db.query(
-    "UPDATE users SET is_online = 0, last_seen = NOW(), updated_at = NOW() WHERE id = ?",
-    [userId],
-    (err) => {
-      if (err) return res.status(500).json({ error: "DB Error" });
-      res.json({ id: userId, is_online: 0 });
-    }
-  );
+router.post("/:userId/offline", async (req, res) => {
+  try {
+    const user = await setUserOnlineStatus(req.params.userId, false);
+    res.json(user);
+  } catch (err) {
+    console.error("Prisma error:", err);
+    res.status(500).json({ error: "DB Error" });
+  }
 });
 
 // Get channels the user is in
-router.get("/:userId/channels", (req, res) => {
-  const { userId } = req.params;
-
-  const query = `
-    SELECT c.* 
-    FROM channel_members cm
-    JOIN channels c ON cm.channel_id = c.id
-    WHERE cm.user_id = ?
-  `;
-
-  db.query(query, [userId], (err, rows) => {
-    if (err) return res.status(500).json({ error: "DB Error" });
-    res.json(rows);
-  });
+router.get("/:userId/channels", async (req, res) => {
+  try {
+    const channels = await getUserChannels(req.params.userId);
+    res.json(channels.map(c => c.channel));
+  } catch (err) {
+    console.error("Prisma error:", err);
+    res.status(500).json({ error: "DB Error" });
+  }
 });
 
-// Get messages the user sent
-router.get("/:userId/messages", (req, res) => {
-  const { userId } = req.params;
-
-  const query = `
-    SELECT * 
-    FROM messages
-    WHERE sender_id = ?
-    ORDER BY created_at DESC
-  `;
-
-  db.query(query, [userId], (err, rows) => {
-    if (err) return res.status(500).json({ error: "DB Error" });
-    res.json(rows);
-  });
+// Get messages sent by the user
+router.get("/:userId/messages", async (req, res) => {
+  try {
+    const messages = await getUserMessages(req.params.userId);
+    res.json(messages);
+  } catch (err) {
+    console.error("Prisma error:", err);
+    res.status(500).json({ error: "DB Error" });
+  }
 });
 
 export default router;

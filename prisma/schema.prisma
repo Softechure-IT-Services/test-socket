@@ -60,7 +60,7 @@ model refresh_tokens {
   user_id     Int
   token_hash  String   @db.VarChar(128)
   expires_at  DateTime @db.DateTime(0)
-  created_at  DateTime @db.DateTime(0)
+  created_at  DateTime @default(now())
   revoked     Boolean? @default(false)
   replaced_by String?  @db.VarChar(128)
   device_info String?  @db.VarChar(255)
@@ -88,7 +88,6 @@ model users {
   created_at      DateTime?         @default(now()) @db.DateTime(0)
   updated_at      DateTime?         @default(now()) @db.DateTime(0)
   password        String            @db.VarChar(255)
-  auth_token      String            @db.VarChar(255)
   channel_members channel_members[]
   channels        channels[]
   messages        messages[]
