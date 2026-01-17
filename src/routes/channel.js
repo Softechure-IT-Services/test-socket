@@ -1,360 +1,738 @@
-// const express = require("express");
-// const router = express.Router();
-// const db = require("../db");
-// const verifyToken = require("../middleware/auth");
-
 import express from "express";
 const router = express.Router();
 import db from "../config/db.js";
-import verifyToken from "../middleware/auth.js";
 
-router.use(verifyToken);
+import prisma from "../config/prisma.js";
+// import verifyToken from "../middleware/auth.js";
+
+// router.use(verifyToken);
 // Get all channels
-router.get("/", (req, res) => {
-  const userId = req.user.id;
+// router.get("/", (req, res) => {
+//   // const userId = req.user.id;
+//   const userId = 87;
+//   // res.json(userId);
+//   const getDms = req.query.get_dms !== "false"; // default true
 
-  const getDms = req.query.get_dms !== "false"; // default true
+//   let sql = `
+//     SELECT DISTINCT c.*
+//     FROM channels c
+//     LEFT JOIN channel_members cm 
+//       ON c.id = cm.channel_id AND cm.user_id = ?
+//     WHERE 
+//       (c.is_private = 0 OR cm.user_id IS NOT NULL)
+//   `;
 
-  let sql = `
-    SELECT DISTINCT c.*
-    FROM channels c
-    LEFT JOIN channel_members cm 
-      ON c.id = cm.channel_id AND cm.user_id = ?
-    WHERE 
-      (c.is_private = 0 OR cm.user_id IS NOT NULL)
-  `;
+//   const params = [userId];
 
-  const params = [userId];
+//   // ✅ If get_dms=false → exclude DM channels
+//   if (!getDms) {
+//     sql += ` AND c.is_dm = 0 `;
+//   }
 
-  // ✅ If get_dms=false → exclude DM channels
-  if (!getDms) {
-    sql += ` AND c.is_dm = 0 `;
+//   sql += ` ORDER BY c.created_at DESC `;
+
+//   db.query(sql, params, (err, rows) => {
+//     if (err) return res.status(500).json({ error: "DB Error" });
+//     res.json(rows);
+//   });
+// });
+
+
+// new
+router.get("/", async (req, res) => {
+  try {
+    const userId = 87;
+    const getDms = req.query.get_dms !== "false";
+
+    const channels = await prisma.channels.findMany({
+      where: {
+        AND: [
+          getDms ? {} : { is_dm: false },
+          {
+            OR: [
+              { is_private: false },
+              {
+                channel_members: {
+                  some: { user_id: userId },
+                },
+              },
+            ],
+          },
+        ],
+      },
+      orderBy: {
+        created_at: "desc",
+      },
+    });
+
+    res.json(channels);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "DB Error" });
   }
-
-  sql += ` ORDER BY c.created_at DESC `;
-
-  db.query(sql, params, (err, rows) => {
-    if (err) return res.status(500).json({ error: "DB Error" });
-    res.json(rows);
-  });
 });
+// new end
 
 
 
 // Get messages for a specific channel
-router.get("/:channelId/messages", (req, res) => {
-  const { channelId } = req.params;
+// router.get("/:channelId/messages", (req, res) => {
+//   const { channelId } = req.params;
 
-  const sql = `
-    SELECT 
-      m.id,
-      m.channel_id,
-      m.sender_id,
-      m.content,
-      m.files,
-      m.created_at,
-      m.updated_at,
-      m.pinned,
-      m.reactions,
-      u.name AS sender_name,
-      u.avatar_url
-    FROM messages m
-    JOIN users u ON u.id = m.sender_id
-    WHERE m.channel_id = ?
-    ORDER BY m.id ASC
-    LIMIT 50
-  `;
+//   const sql = `
+//     SELECT 
+//       m.id,
+//       m.channel_id,
+//       m.sender_id,
+//       m.content,
+//       m.files,
+//       m.created_at,
+//       m.updated_at,
+//       m.pinned,
+//       m.reactions,
+//       u.name AS sender_name,
+//       u.avatar_url
+//     FROM messages m
+//     JOIN users u ON u.id = m.sender_id
+//     WHERE m.channel_id = ?
+//     ORDER BY m.id ASC
+//     LIMIT 50
+//   `;
 
-  db.query(sql, [channelId], (err, rows) => {
-    if (err) return res.status(500).json({ error: "DB Error" });
-    res.json(rows);
-  });
+//   db.query(sql, [channelId], (err, rows) => {
+//     if (err) return res.status(500).json({ error: "DB Error" });
+//     res.json(rows);
+//   });
+// });
+
+
+// New
+router.get("/:channelId/messages", async (req, res) => {
+  try {
+    const channelId = Number(req.params.channelId);
+
+    const messages = await prisma.messages.findMany({
+      where: {
+        channel_id: channelId,
+      },
+      include: {
+        users: {
+          select: {
+            name: true,
+            avatar_url: true,
+          },
+        },
+      },
+      orderBy: {
+        id: "asc",
+      },
+      take: 50,
+    });
+
+    const formatted = messages.map(m => ({
+      id: m.id,
+      channel_id: m.channel_id,
+      sender_id: m.sender_id,
+      content: m.content,
+      files: m.files,
+      reactions: m.reactions,
+      pinned: m.pinned,
+      created_at: m.created_at,
+      updated_at: m.updated_at,
+      sender_name: m.users?.name ?? null,
+      avatar_url: m.users?.avatar_url ?? null,
+    }));
+
+    res.json(formatted);
+  } catch (err) {
+    console.error("Prisma messages error:", err);
+    res.status(500).json({
+      error: "DB Error",
+      details: err.message,
+    });
+  }
 });
+
+
+// New end
 
 
 // Get members of a specific channel
-router.get("/:channelId/members",(req, res) => {
-  const { channelId } = req.params;
-  db.query(
-    `SELECT u.id, u.username, u.email 
-     FROM channel_members cm
-     JOIN users u ON cm.user_id = u.id
-     WHERE cm.channel_id = ?`,
-    [channelId],
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: "DB Error" });
-      res.json(rows);
-    }
-  );
+// router.get("/:channelId/members",(req, res) => {
+//   const { channelId } = req.params;
+//   db.query(
+//     `SELECT u.id, u.username, u.email 
+//      FROM channel_members cm
+//      JOIN users u ON cm.user_id = u.id
+//      WHERE cm.channel_id = ?`,
+//     [channelId],
+//     (err, rows) => {
+//       if (err) return res.status(500).json({ error: err });
+//       res.json(rows);
+//     }
+//   );
+// });
+
+
+// New
+router.get("/:channelId/members", async (req, res) => {
+  try {
+    const channelId = Number(req.params.channelId);
+
+    const members = await prisma.channel_members.findMany({
+      where: { channel_id: channelId },
+      include: {
+        users: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    res.json(members.map(m => m.users));
+  } catch (err) {
+    res.status(500).json({ error: "DB Error" });
+  }
 });
+
+
+// New End
 
 // Optionally, create a new channel
-router.post("/", (req, res) => {
-  const { name, isPrivate, memberIds = [] } = req.body;
-  const userId = req.user.id;
+// router.post("/", (req, res) => {
+//   const { name, isPrivate, memberIds = [] } = req.body;
 
-  if (!name || !name.trim()) {
-    return res.status(400).json({ error: "Channel name required" });
-  }
+//   // res.json(req.body);
+//   // const userId = req.user.id;
+//   const userId = 87;
 
-  // ❌ Private channel must have members
-  if (isPrivate && memberIds.length === 0) {
-    return res
-      .status(400)
-      .json({ error: "Private channel needs members" });
-  }
+//   if (!name || !name.trim()) {
+//     return res.status(400).json({ error: "Channel name required" });
+//   }
 
-  db.beginTransaction((err) => {
-    if (err) return res.status(500).json({ error: "Transaction error" });
+//   // ❌ Private channel must have members
+//   if (isPrivate && memberIds.length === 0) {
+//     return res
+//       .status(400)
+//       .json({ error: "Private channel needs members" });
+//   }
 
-    const insertChannelSql = `
-      INSERT INTO channels (name, is_private, is_dm, created_by)
-      VALUES (?, ?, 0, ?)
-    `;
+//   db.beginTransaction((err) => {
+//     if (err) return res.status(500).json({ error: "Transaction error" });
 
-    db.query(
-      insertChannelSql,
-      [name.trim(), isPrivate ? 1 : 0, userId],
-      (err, result) => {
-        if (err) {
-          return db.rollback(() =>
-            res.status(500).json({ error: "Channel creation failed" })
-          );
-        }
+//     const insertChannelSql = `
+//       INSERT INTO channels (name, is_private, is_dm, created_by)
+//       VALUES (?, ?, 0, ?)
+//     `;
 
-        const channelId = result.insertId;
+//     db.query(
+//       insertChannelSql,
+//       [name.trim(), isPrivate ? 1 : 0, userId],
+//       (err, result) => {
+//         if (err) {
+//           return db.rollback(() =>
+//             res.status(500).json({ error: "Channel creation failed" })
+//           );
+//         }
 
-        // 🟢 PUBLIC CHANNEL → NO MEMBERS
-        if (!isPrivate) {
-          return db.commit(() => {
-            res.status(201).json({
-              id: channelId,
-              name,
-              isPrivate: false,
-            });
-          });
-        }
+//         const channelId = result.insertId;
 
-        // 🔒 PRIVATE CHANNEL → ADD MEMBERS
-        const uniqueMemberIds = Array.from(
-          new Set([userId, ...memberIds])
-        );
+//         // 🟢 PUBLIC CHANNEL → NO MEMBERS
+//         if (!isPrivate) {
+//           return db.commit(() => {
+//             res.status(201).json({
+//               id: channelId,
+//               name,
+//               isPrivate: false,
+//             });
+//           });
+//         }
 
-        const memberValues = uniqueMemberIds.map((uid) => [
-          channelId,
-          uid,
-        ]);
+//         // 🔒 PRIVATE CHANNEL → ADD MEMBERS
+//         const uniqueMemberIds = Array.from(
+//           new Set([userId, ...memberIds])
+//         );
 
-        db.query(
-          `INSERT INTO channel_members (channel_id, user_id) VALUES ?`,
-          [memberValues],
-          (err) => {
-            if (err) {
-              return db.rollback(() =>
-                res.status(500).json({ error: "Adding members failed" })
-              );
-            }
+//         const memberValues = uniqueMemberIds.map((uid) => [
+//           channelId,
+//           uid,
+//         ]);
 
-            db.commit(() => {
-              res.status(201).json({
-                id: channelId,
-                name,
-                isPrivate: true,
-                members: uniqueMemberIds,
-              });
-            });
-          }
-        );
-      }
-    );
-  });
-});
+//         db.query(
+//           `INSERT INTO channel_members (channel_id, user_id) VALUES ?`,
+//           [memberValues],
+//           (err) => {
+//             if (err) {
+//               return db.rollback(() =>
+//                 res.status(500).json({ error: "Adding members failed" })
+//               );
+//             }
 
-router.post("/:channelId/join", (req, res) => {
-  const userId = req.user.id;
-  const channelId = req.params.channelId;
+//             db.commit(() => {
+//               res.status(201).json({
+//                 id: channelId,
+//                 name,
+//                 isPrivate: true,
+//                 members: uniqueMemberIds,
+//               });
+//             });
+//           }
+//         );
+//       }
+//     );
+//   });
+// });
 
-  const checkSql = `
-    SELECT is_private FROM channels WHERE id = ?
-  `;
+// New
+router.post("/", async (req, res) => {
+  try {
+    const { name, isPrivate, memberIds = [] } = req.body;
 
-  db.query(checkSql, [channelId], (err, rows) => {
-    if (err || !rows.length)
-      return res.status(404).json({ error: "Channel not found" });
+    // TEMP: hard-coded user (replace with req.user.id later)
+    const userId = 87;
 
-    if (rows[0].is_private) {
-      return res
-        .status(403)
-        .json({ error: "Cannot join private channel" });
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: "Channel name required" });
     }
 
-    const joinSql = `
-      INSERT IGNORE INTO channel_members (channel_id, user_id)
-      VALUES (?, ?)
-    `;
+    // ❌ Private channel must have members
+    if (isPrivate && memberIds.length === 0) {
+      return res
+        .status(400)
+        .json({ error: "Private channel needs members" });
+    }
 
-    db.query(joinSql, [channelId, userId], (err) => {
-      if (err) return res.status(500).json({ error: "Join failed" });
-      res.json({ success: true });
+    const result = await prisma.$transaction(async (tx) => {
+      // 1️⃣ Create channel
+      const channel = await tx.channels.create({
+        data: {
+          name: name.trim(),
+          is_private: isPrivate ?? false,
+          is_dm: false,
+          created_by: userId,
+        },
+      });
+
+      // 🟢 PUBLIC CHANNEL → NO MEMBERS
+      if (!isPrivate) {
+        return {
+          id: channel.id,
+          name: channel.name,
+          isPrivate: false,
+        };
+      }
+
+
+      // res.json(memberIds);
+
+      // 🔒 PRIVATE CHANNEL → ADD MEMBERS
+      const uniqueMemberIds = Array.from(
+        new Set([userId, ...memberIds])
+      );
+
+      await tx.channel_members.createMany({
+        data: uniqueMemberIds.map((uid) => ({
+          channel_id: channel.id,
+          user_id: uid,
+        })),
+        skipDuplicates: true, // matches INSERT IGNORE behavior
+      });
+
+      return {
+        id: channel.id,
+        name: channel.name,
+        isPrivate: true,
+        members: uniqueMemberIds,
+      };
     });
-  });
+
+    res.status(201).json(result);
+  } catch (err) {
+    console.error("Create channel error:", err);
+    res.status(500).json({
+      error: "Channel creation failed",
+      details: err.message,
+    });
+  }
 });
 
+// New End
 
-// Get channel info + members + last 50 messages
-// router.get("/:channelId", (req, res) => {
+// router.post("/:channelId/join", (req, res) => {
+//   const userId = req.user.id;
 //   const channelId = req.params.channelId;
 
-//   const sqlChannel = "SELECT * FROM channels WHERE id = ?";
-//   const sqlMessages =
-//     "SELECT * FROM messages WHERE channel_id = ? ORDER BY id ASC LIMIT 50";
-//   const sqlMembers = `
-//     SELECT u.id, u.name, u.email
-//     FROM channel_members cm
-//     JOIN users u ON cm.user_id = u.id
-//     WHERE cm.channel_id = ?
+//   const checkSql = `
+//     SELECT is_private FROM channels WHERE id = ?
 //   `;
 
-//   const response = {};
-
-//   db.query(sqlChannel, [channelId], (err, channelRows) => {
-//     if (err) return res.status(500).json({ error: "DB Error" });
-
-//     if (channelRows.length === 0)
+//   db.query(checkSql, [channelId], (err, rows) => {
+//     if (err || !rows.length)
 //       return res.status(404).json({ error: "Channel not found" });
 
-//     response.channel = channelRows[0];
+//     if (rows[0].is_private) {
+//       return res
+//         .status(403)
+//         .json({ error: "Cannot join private channel" });
+//     }
 
-//     db.query(sqlMessages, [channelId], (err, messages) => {
-//       if (err) return res.status(500).json({ error: "DB Error" });
-//       response.messages = messages;
+//     const joinSql = `
+//       INSERT IGNORE INTO channel_members (channel_id, user_id)
+//       VALUES (?, ?)
+//     `;
 
-//       db.query(sqlMembers, [channelId], (err, members) => {
-//         if (err) return res.status(500).json({ error: "DB Error2" });
-
-//         response.members = members;
-//         res.json(response);
-//       });
+//     db.query(joinSql, [channelId, userId], (err) => {
+//       if (err) return res.status(500).json({ error: "Join failed" });
+//       res.json({ success: true });
 //     });
 //   });
 // });
 
-router.get("/:id", verifyToken, (req, res) => {
-  const channelId = req.params.id;
-  const userId = req.user.id;
 
-  db.query("SELECT * FROM channels WHERE id = ? LIMIT 1", [channelId], (err, rows) => {
-    if (err || !rows.length) return res.status(404).json({ error: "Not found" });
+// new
+router.post("/:channelId/join", async (req, res) => {
+  const userId = 87;
+  const channelId = Number(req.params.channelId);
 
-    const channel = rows[0];
+  try {
+    const channel = await prisma.channels.findUnique({
+      where: { id: channelId },
+      select: { is_private: true },
+    });
 
-    // If DM → get other user
-    if (channel.is_dm) {
-      db.query(
-        `
-        SELECT u.id, u.name, u.avatar_url
-        FROM channel_members cm
-        JOIN users u ON u.id = cm.user_id
-        WHERE cm.channel_id = ? AND cm.user_id != ?
-        LIMIT 1
-        `,
-        [channelId, userId],
-        (err2, userRows) => {
-          if (err2 || !userRows.length) {
-            return res.json({ channel });
-          }
-
-          return res.json({
-            channel,
-            dm_user: userRows[0], // 👈 IMPORTANT
-          });
-        }
-      );
-    } else {
-      // Normal channel → return members
-      db.query(
-        `
-        SELECT u.id, u.name, u.email
-        FROM channel_members cm
-        JOIN users u ON u.id = cm.user_id
-        WHERE cm.channel_id = ?
-        `,
-        [channelId],
-        (err2, members) => {
-          if (err2) return res.status(500).json({ error: "DB Error" });
-
-          res.json({ channel, members });
-        }
-      );
+    if (!channel) {
+      return res.status(404).json({ error: "Channel not found" });
     }
-  });
+
+    if (channel.is_private) {
+      return res.status(403).json({ error: "Cannot join private channel" });
+    }
+
+    // Equivalent to INSERT IGNORE
+    await prisma.channel_members.upsert({
+      where: {
+        channel_id_user_id: {
+          channel_id: channelId,
+          user_id: userId,
+        },
+      },
+      update: {},
+      create: {
+        channel_id: channelId,
+        user_id: userId,
+      },
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Join failed" });
+  }
 });
+
+// new end
+
+
+// router.get("/:id", verifyToken, (req, res) => {
+// router.get("/:id", (req, res) => {
+//   const channelId = req.params.id;
+//   const userId = req.user.id;
+
+//   db.query("SELECT * FROM channels WHERE id = ? LIMIT 1", [channelId], (err, rows) => {
+//     if (err || !rows.length) return res.status(404).json({ error: "Not found" });
+
+//     const channel = rows[0];
+ 
+//     // If DM → get other user
+//     if (channel.is_dm) {
+//       db.query(
+//         `
+//         SELECT u.id, u.name, u.avatar_url
+//         FROM channel_members cm
+//         JOIN users u ON u.id = cm.user_id
+//         WHERE cm.channel_id = ? AND cm.user_id != ?
+//         LIMIT 1
+//         `,
+//         [channelId, userId],
+//         (err2, userRows) => {
+//           if (err2 || !userRows.length) {
+//             return res.json({ channel });
+//           }
+
+//           return res.json({
+//             channel,
+//             dm_user: userRows[0], // 👈 IMPORTANT
+//           });
+//         }
+//       );
+//     } else {
+//       // Normal channel → return members
+//       db.query(
+//         `
+//         SELECT u.id, u.name, u.email
+//         FROM channel_members cm
+//         JOIN users u ON u.id = cm.user_id
+//         WHERE cm.channel_id = ?
+//         `,
+//         [channelId],
+//         (err2, members) => {
+//           if (err2) return res.status(500).json({ error: "DB Error" });
+
+//           res.json({ channel, members });
+//         }
+//       );
+//     }
+//   });
+// });
+
+// new
+router.get("/:id", async (req, res) => {
+  const channelId = Number(req.params.id);
+  const userId = 87;
+
+  
+
+  try {
+    const channel = await prisma.channels.findUnique({
+      where: { id: channelId },
+    });
+
+    if (!channel) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    
+    // DM → return other user
+    if (channel.is_dm) {
+      const dmUser = await prisma.channel_members.findFirst({
+        where: {
+          channel_id: channelId,
+          user_id: { not: userId },
+        },
+        include: {
+          users: {
+            select: {
+              id: true,
+              name: true,
+              avatar_url: true,
+            },
+          },
+        },
+      });
+      
+      return res.json({
+        channel,
+        dm_user: dmUser?.users ?? null,
+      });
+    }
+    
+    // Normal channel → return members
+    const members = await prisma.channel_members.findMany({
+      where: { channel_id: channelId },
+      include: {
+        users: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+    
+    // res.json(channel);
+    res.json({
+      channel,
+      members: members.map(m => m.users),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "DB Error" });
+  }
+});
+// new end
 
 
 // Pin a message (REST)
-router.post("/:channelId/pin/:messageId", (req, res) => {
-  const { channelId, messageId } = req.params;
-  const userId = req.user.id;
+// router.post("/:channelId/pin/:messageId", (req, res) => {
+//   const { channelId, messageId } = req.params;
+//   const userId = req.user.id;
 
-  // Check channel and membership if private
-  db.query("SELECT is_private, created_by FROM channels WHERE id = ? LIMIT 1", [channelId], (err, chRows) => {
-    if (err || !chRows.length) return res.status(404).json({ error: "Channel not found" });
-    const channel = chRows[0];
+//   // Check channel and membership if private
+//   db.query("SELECT is_private, created_by FROM channels WHERE id = ? LIMIT 1", [channelId], (err, chRows) => {
+//     if (err || !chRows.length) return res.status(404).json({ error: "Channel not found" });
+//     const channel = chRows[0];
 
-    const proceed = () => {
-      // Ensure message exists and not already pinned
-      db.query("SELECT pinned FROM messages WHERE id = ? AND channel_id = ? LIMIT 1", [messageId, channelId], (err2, msgRows) => {
-        if (err2 || !msgRows.length) return res.status(404).json({ error: "Message not found" });
-        if (msgRows[0].pinned) return res.status(400).json({ error: "Message already pinned" });
+//     const proceed = () => {
+//       // Ensure message exists and not already pinned
+//       db.query("SELECT pinned FROM messages WHERE id = ? AND channel_id = ? LIMIT 1", [messageId, channelId], (err2, msgRows) => {
+//         if (err2 || !msgRows.length) return res.status(404).json({ error: "Message not found" });
+//         if (msgRows[0].pinned) return res.status(400).json({ error: "Message already pinned" });
 
-        db.query("UPDATE messages SET pinned = 1, pinned_by = ?, pinned_at = NOW() WHERE id = ? AND channel_id = ?", [userId, messageId, channelId], (err3) => {
-          if (err3) return res.status(500).json({ error: "DB Error" });
-          res.json({ success: true });
-        });
-      });
-    };
+//         db.query("UPDATE messages SET pinned = 1, pinned_by = ?, pinned_at = NOW() WHERE id = ? AND channel_id = ?", [userId, messageId, channelId], (err3) => {
+//           if (err3) return res.status(500).json({ error: "DB Error" });
+//           res.json({ success: true });
+//         });
+//       });
+//     };
+
+//     if (channel.is_private) {
+//       // verify membership
+//       db.query("SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ? LIMIT 1", [channelId, userId], (errm, memRows) => {
+//         if (errm) return res.status(500).json({ error: "DB Error" });
+//         if (!memRows.length) return res.status(403).json({ error: "Not a channel member" });
+//         proceed();
+//       });
+//     } else {
+//       proceed();
+//     }
+//   });
+// });
+
+// new
+router.post("/:channelId/pin/:messageId", async (req, res) => {
+  const channelId = Number(req.params.channelId);
+  const messageId = Number(req.params.messageId);
+  const userId = 87;
+
+  try {
+    const channel = await prisma.channels.findUnique({
+      where: { id: channelId },
+      select: { is_private: true },
+    });
+
+    if (!channel) {
+      return res.status(404).json({ error: "Channel not found" });
+    }
 
     if (channel.is_private) {
-      // verify membership
-      db.query("SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ? LIMIT 1", [channelId, userId], (errm, memRows) => {
-        if (errm) return res.status(500).json({ error: "DB Error" });
-        if (!memRows.length) return res.status(403).json({ error: "Not a channel member" });
-        proceed();
+      const isMember = await prisma.channel_members.findUnique({
+        where: {
+          channel_id_user_id: {
+            channel_id: channelId,
+            user_id: userId,
+          },
+        },
       });
-    } else {
-      proceed();
+
+      if (!isMember) {
+        return res.status(403).json({ error: "Not a channel member" });
+      }
     }
-  });
+
+    const message = await prisma.messages.findFirst({
+      where: {
+        id: messageId,
+        channel_id: channelId,
+      },
+      select: { pinned: true },
+    });
+
+    if (!message) {
+      return res.status(404).json({ error: "Message not found" });
+    }
+
+    if (message.pinned) {
+      return res.status(400).json({ error: "Message already pinned" });
+    }
+
+    await prisma.messages.update({
+      where: { id: messageId },
+      data: {
+        pinned: "1",
+        // pinned_by: userId,
+        // pinned_at: new Date(),
+      },
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "DB Error" });
+  }
 });
 
-// Unpin a message (REST)
-router.delete("/:channelId/pin/:messageId", (req, res) => {
-  const { channelId, messageId } = req.params;
-  const userId = req.user.id;
+// new end
 
-  // fetch message to check pinned_by and channel creator
-  const sql = `
-    SELECT m.pinned, m.pinned_by, c.created_by
-    FROM messages m
-    JOIN channels c ON c.id = ?
-    WHERE m.id = ? AND m.channel_id = ? LIMIT 1
-  `;
-  db.query(sql, [channelId, messageId, channelId], (err, rows) => {
-    if (err || !rows.length) return res.status(404).json({ error: "Message or channel not found" });
-    const row = rows[0];
-    if (!row.pinned) return res.status(400).json({ error: "Message is not pinned" });
+// router.delete("/:channelId/pin/:messageId", (req, res) => {
+//   const { channelId, messageId } = req.params;
+//   const userId = req.user.id;
 
-    // Only the user who pinned OR channel creator can unpin
-    if (String(row.pinned_by) !== String(userId) && String(row.created_by) !== String(userId)) {
+//   // fetch message to check pinned_by and channel creator
+//   const sql = `
+//     SELECT m.pinned, m.pinned_by, c.created_by
+//     FROM messages m
+//     JOIN channels c ON c.id = ?
+//     WHERE m.id = ? AND m.channel_id = ? LIMIT 1
+//   `;
+//   db.query(sql, [channelId, messageId, channelId], (err, rows) => {
+//     if (err || !rows.length) return res.status(404).json({ error: "Message or channel not found" });
+//     const row = rows[0];
+//     if (!row.pinned) return res.status(400).json({ error: "Message is not pinned" });
+
+//     // Only the user who pinned OR channel creator can unpin
+//     if (String(row.pinned_by) !== String(userId) && String(row.created_by) !== String(userId)) {
+//       return res.status(403).json({ error: "Not allowed to unpin" });
+//     }
+
+//     db.query("UPDATE messages SET pinned = 0, pinned_by = NULL, pinned_at = NULL WHERE id = ? AND channel_id = ?", [messageId, channelId], (err2) => {
+//       if (err2) return res.status(500).json({ error: "DB Error" });
+//       res.json({ success: true });
+//     });
+//   });
+// });
+
+
+// new
+router.delete("/:channelId/pin/:messageId", async (req, res) => {
+  const channelId = Number(req.params.channelId);
+  const messageId = Number(req.params.messageId);
+  // const userId = req.user.id;
+  const userId = 87;
+
+  try {
+    const message = await prisma.messages.findFirst({
+      where: {
+        id: messageId,
+        channel_id: channelId,
+      },
+      include: {
+        channels: {
+          select: { created_by: true },
+        },
+      },
+    });
+
+    if (!message || !message.pinned) {
+      return res.status(404).json({ error: "Message not pinned or not found" });
+    }
+
+    if (
+      String(message.pinned_by) !== String(userId) &&
+      String(message.channels.created_by) !== String(userId)
+    ) {
       return res.status(403).json({ error: "Not allowed to unpin" });
     }
 
-    db.query("UPDATE messages SET pinned = 0, pinned_by = NULL, pinned_at = NULL WHERE id = ? AND channel_id = ?", [messageId, channelId], (err2) => {
-      if (err2) return res.status(500).json({ error: "DB Error" });
-      res.json({ success: true });
+    await prisma.messages.update({
+      where: { id: messageId },
+      data: {
+        pinned: null,
+        pinned_by: null,
+        pinned_at: null,
+      },
     });
-  });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "DB Error" });
+  }
 });
+
+// new end
 
 // List pinned messages for a channel (REST)
 router.get("/:channelId/pins", (req, res) => {
