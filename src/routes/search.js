@@ -1,6 +1,12 @@
-const express = require("express");
+// const express = require("express");
+// const router = express.Router();
+// const db = require("../db");
+
+import express from "express";
+import db from "../config/db.js";
 const router = express.Router();
-const db = require("../db");
+
+
 
 // GET /search?q=keyword
 router.get("/", (req, res) => {
@@ -44,4 +50,4 @@ router.get("/", (req, res) => {
     });
 });
 
-module.exports = router;
+export default router;

@@ -1,3 +1,57 @@
+// const express = require("express");
+// const http = require("http");
+// const { Server } = require("socket.io");
+// const cors = require("cors");
+// const dotenv = require("dotenv");
+// const db = require("./db");
+// const channelRoutes = require("./routes/channel");
+// const searchRouter = require("./routes/search");
+// const threadsRouter = require("./routes/thread");
+// const usersRouter = require("./routes/users");
+// const authRouter = require("./routes/auth");
+// const externalRouter = require("./routes/external");
+// const uploadRoutes = require("./routes/upload");
+// const dmRoutes = require("./routes/dm");
+
+// const supabase = require("./utils/supabase");
+// const cookieParser = require("cookie-parser");
+// const cookie = require("cookie");
+// const { verifyOpaqueToken } = require("./utils/tokenAuth");
+
+// const { verifyAccessToken } = require("./utils/jwt");
+
+
+
+import express from "express";
+import http from "http";
+import { Server } from "socket.io";
+import cors from "cors";
+import dotenv from "dotenv";
+import "dotenv/config";
+import cookieParser from "cookie-parser";
+import cookie from "cookie";
+
+/* Database */
+import db from "./config/db.js";
+
+/* Routes */
+// import channelRoutes from "./routes/channel.js";
+// import searchRouter from "./routes/search.js";
+// import threadsRouter from "./routes/thread.js";
+// import usersRouter from "./routes/users.js";
+// import authRouter from "./routes/auth.js";
+// import externalRouter from "./routes/external.js";
+// import uploadRoutes from "./routes/upload.js";
+// import dmRoutes from "./routes/dm.js";
+
+
+import {channelRoutes, searchRouter, threadsRouter, usersRouter, authRouter, externalRouter, uploadRoutes, dmRoutes} from "./routes/index.js";
+
+/* Utils */
+import supabase from "./utils/supabase.js";
+// import { verifyOpaqueToken } from "../utils/tokenAuth.js";
+import { verifyAccessToken } from "./utils/jwt.js";
+
 import express from "express";
 import http from "http";
 import cors from "cors";

@@ -1,6 +1,7 @@
-const db = require("../db");
+// const db = require("../db");
+import db from "../config/db.js";
 
-function verifyOpaqueToken(token) {
+export default function verifyOpaqueToken(token) {
   return new Promise((resolve, reject) => {
     const sql = `
       SELECT id, name, email, avatar_url
@@ -24,4 +25,4 @@ function verifyOpaqueToken(token) {
   });
 }
 
-module.exports = { verifyOpaqueToken };
+

@@ -1,13 +1,29 @@
-const express = require("express");
+// const express = require("express");
+// const router = express.Router();
+// const db = require("../db");
+// const {
+//   generateAccessToken,
+//   generateRefreshToken,
+//   verifyRefreshToken,
+// } = require("../utils/jwt");
+// const EXTERNAL_SECRET = process.env.EXTERNAL_AUTH_SECRET;
+// const jwt = require("jsonwebtoken");
+
+
+
+// new
+import express from "express";
 const router = express.Router();
-const db = require("../db");
-const {
+import db from "../config/db.js";
+import jwt from "jsonwebtoken";
+import {
   generateAccessToken,
   generateRefreshToken,
   verifyRefreshToken,
-} = require("../utils/jwt");
+} from "../utils/jwt.js";
+
 const EXTERNAL_SECRET = process.env.EXTERNAL_AUTH_SECRET;
-const jwt = require("jsonwebtoken");
+// new
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -268,4 +284,4 @@ router.post("/external-delete", (req, res) => {
   });
 });
 
-module.exports = router;
+export default router;
