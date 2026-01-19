@@ -5,7 +5,7 @@ import prisma from "../config/prisma.js";
  */
 export const createOrGetDM = async (req, res) => {
   // TEMP: hardcoded until auth middleware is enabled
-  const userId = 87;
+  const userId = req.user.id;
   const otherUserId = Number(req.params.otherUserId);
 
   if (!otherUserId || otherUserId === userId) {
@@ -62,8 +62,7 @@ export const createOrGetDM = async (req, res) => {
  * List all DMs for logged-in user
  */
 export const listMyDMs = async (req, res) => {
-  // TEMP: hardcoded until auth middleware is enabled
-  const userId = 87;
+  const userId = req.user.id;
 
   if (!userId) {
     return res.status(401).json({ error: "Unauthorized" });

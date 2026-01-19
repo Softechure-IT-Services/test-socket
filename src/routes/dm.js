@@ -1,13 +1,12 @@
 import express from "express";
-// import verifyToken from "../middleware/auth.js";
+import verifyToken from "../middleware/auth.js";
 import {
   createOrGetDM,
   listMyDMs,
 } from "../controllers/dm.controller.js";
 
 const router = express.Router();
-
-// router.use(verifyToken);
+router.use(verifyToken);
 
 router.post("/with/:otherUserId", createOrGetDM);
 
