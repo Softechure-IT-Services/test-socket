@@ -6,7 +6,6 @@ import {
   getAllUsers,
   getUserById,
   searchUsers,
-  createUser,
   updateUser,
   setUserOnlineStatus,
   getUserChannels,
@@ -50,15 +49,15 @@ router.get("/:userId", async (req, res) => {
 });
 
 // Create user
-router.post("/", async (req, res) => {
-  try {
-    const user = await createUser(req.body);
-    res.status(201).json(user);
-  } catch (err) {
-    console.error("Prisma error:", err);
-    res.status(500).json({ error: "DB Error" });
-  }
-});
+// router.post("/", async (req, res) => {
+//   try {
+//     const user = await createUser(req.body);
+//     res.status(201).json(user);
+//   } catch (err) {
+//     console.error("Prisma error:", err);
+//     res.status(500).json({ error: "DB Error" });
+//   }
+// });
 
 // Update user
 router.put("/:userId", async (req, res) => {

@@ -65,27 +65,27 @@ export const searchUsers = async (q, exclude) => {
 /**
  * Create a new user
  */
-export const createUser = async ({ external_id, name, email, avatar_url }) => {
-  return prisma.users.create({
-    data: {
-      external_id,
-      name,
-      email,
-      avatar_url,
-      is_online: false,
-      last_seen: new Date(),
-    },
-    select: {
-      id: true,
-      external_id: true,
-      name: true,
-      email: true,
-      avatar_url: true,
-      is_online: true,
-      last_seen: true,
-    },
-  });
-};
+// export const createUser = async ({ external_id, name, email, avatar_url }) => {
+//   return prisma.users.create({
+//     data: {
+//       external_id,
+//       name,
+//       email,
+//       avatar_url,
+//       is_online: false,
+//       last_seen: new Date(),
+//     },
+//     select: {
+//       id: true,
+//       external_id: true,
+//       name: true,
+//       email: true,
+//       avatar_url: true,
+//       is_online: true,
+//       last_seen: true,
+//     },
+//   });
+// };
 
 /**
  * Update user

@@ -12,6 +12,7 @@ const app = express();
 app.use(cookieParser());
 const allowedOrigins = [
   "http://localhost:3000",
+  "http://localhost:5000",
   "http://192.168.1.14:3000",
   "http://192.168.1.15:3000",
   "http://192.168.0.113:5000",
@@ -20,7 +21,7 @@ const allowedOrigins = [
 ].filter(Boolean);
 
 app.use(cors({
-  origin: "https://test-socket-client-steel.vercel.app",
+  origin: process.env.NODE_ENV === "production" ? "https://test-socket-client-steel.vercel.app" : allowedOrigins,
   credentials: true,
 }));
 

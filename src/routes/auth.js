@@ -60,9 +60,9 @@ router.post("/login", async (req, res) => {
     res.cookie("user_id", String(user.id), { sameSite: isProd ? "none" : "lax", secure: isProd, httpOnly: false });
     res.cookie("username", user.name || "", { sameSite: isProd ? "none" : "lax", secure: isProd, httpOnly: false });
 
-    res.json({ message: "Login successful", user: { id: user.id, name: user.name, email: user.email, avatar_url: user.avatar_url } });
+    res.json({ message: "Login successful", user: { id: user.id, name: user.name, email: user.email, access_token: accessToken, avatar_url: user.avatar_url } });
   } catch (err) {
-    console.error("Login error:", err);
+    console.error("Login error:", err.message);
     res.status(err.status || 500).json({ error: err.message || "Server error" });
   }
 });
