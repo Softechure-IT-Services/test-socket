@@ -1,8 +1,3 @@
-// const express = require("express");
-// const multer = require("multer");
-// const crypto = require("crypto");
-// const path = require("path");
-// const supabase = require("../utils/supabase");
 
 import express from "express";
 import multer from "multer";

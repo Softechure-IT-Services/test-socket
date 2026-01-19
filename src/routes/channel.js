@@ -2,7 +2,10 @@ import express from "express";
 const router = express.Router();
 import db from "../config/db.js";
 
-import prisma from "../config/prisma.js";
+// import prisma from "../config/prisma.js";
+
+import { PrismaClient } from "@prisma/client";
+const prisma = new PrismaClient();
 // import verifyToken from "../middleware/auth.js";
 
 // router.use(verifyToken);
