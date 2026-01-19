@@ -14,7 +14,7 @@ export default function registerMessageSockets(io, socket) {
         channel_id,
         sender_id,
         content,
-        files: files || [],
+        files: JSON.stringify(files || []),
       },
       include: {
         users: true,

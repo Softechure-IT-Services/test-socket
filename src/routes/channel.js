@@ -1,11 +1,8 @@
 import express from "express";
 const router = express.Router();
 import db from "../config/db.js";
-
-// import prisma from "../config/prisma.js";
-
-import { PrismaClient } from "@prisma/client";
-const prisma = new PrismaClient();
+import verifyToken from "../middleware/auth.js";
+import prisma from "../config/prisma.js";
 // import verifyToken from "../middleware/auth.js";
 
 // router.use(verifyToken);
@@ -492,69 +489,43 @@ router.post("/:channelId/join", async (req, res) => {
 // });
 
 // new
-router.get("/:id", async (req, res) => {
+router.get("/:id", verifyToken, async (req, res) => {
   const channelId = Number(req.params.id);
-  const userId = 87;
-
-  
+  const userId = req.user.id; // get logged-in user from middleware
 
   try {
-    const channel = await prisma.channels.findUnique({
-      where: { id: channelId },
-    });
+    const channel = await prisma.channels.findUnique({ where: { id: channelId } });
+    if (!channel) return res.status(404).json({ error: "Not found" });
 
-    if (!channel) {
-      return res.status(404).json({ error: "Not found" });
-    }
-    
-    // DM → return other user
-    if (channel.is_dm) {
-      const dmUser = await prisma.channel_members.findFirst({
-        where: {
-          channel_id: channelId,
-          user_id: { not: userId },
-        },
-        include: {
-          users: {
-            select: {
-              id: true,
-              name: true,
-              avatar_url: true,
-            },
-          },
-        },
-      });
-      
-      return res.json({
-        channel,
-        dm_user: dmUser?.users ?? null,
-      });
-    }
-    
-    // Normal channel → return members
+   if (channel.is_dm) {
+  const dmUser = await prisma.channel_members.findFirst({
+    where: {
+      channel_id: channelId,
+      user_id: { not: userId }, // only gets the "other" user
+    },
+    include: { users: { select: { id: true, name: true, avatar_url: true } } },
+  });
+
+  return res.json({
+    channel,
+    dm_user: dmUser?.users ?? null,
+  });
+}
+
+
+    // Normal channel
     const members = await prisma.channel_members.findMany({
       where: { channel_id: channelId },
-      include: {
-        users: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-      },
+      include: { users: { select: { id: true, name: true, email: true } } },
     });
-    
-    // res.json(channel);
-    res.json({
-      channel,
-      members: members.map(m => m.users),
-    });
+
+    res.json({ channel, members: members.map(m => m.users) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "DB Error" });
   }
 });
+
 // new end
 
 
