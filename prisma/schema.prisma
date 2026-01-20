@@ -42,7 +42,7 @@ model messages {
   content          String?   @db.Text
   files            String?   @db.LongText
   reactions        String?   @db.LongText
-  pinned           String?   @db.LongText
+  pinned           Boolean?
   thread_parent_id Int?
   created_at       DateTime? @default(now()) @db.DateTime(0)
   updated_at       DateTime? @default(now()) @db.DateTime(0)

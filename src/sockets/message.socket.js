@@ -40,69 +40,191 @@ export default function registerMessageSockets(io, socket) {
   // ================= EDIT =================
   socket.on("editMessage", async ({ messageId, content, channel_id }) => {
     if (!messageId || !channel_id || !content) return;
+    const msgId = Number(messageId);
+    const chId = Number(channel_id);
+
 
     const msg = await prisma.messages.findFirst({
-      where: { id: messageId, channel_id },
+      where: { id: msgId, channel_id: chId },
     });
 
     if (!msg || String(msg.sender_id) !== String(socket.user.id)) return;
 
     const updated = await prisma.messages.update({
-      where: { id: messageId },
+      where: { id: msgId },
       data: { content },
     });
 
-    io.to(`channel_${channel_id}`).emit("messageEdited", {
-      id: messageId,
+    io.to(`channel_${chId}`).emit("messageEdited", {
+      id: msgId,
       content,
-      channel_id,
+      channel_id: chId,
       updated_at: updated.updated_at,
     });
   });
 
   // ================= DELETE =================
   socket.on("deleteMessage", async ({ id }) => {
-    if (!id) return;
+  if (!id) return;
 
-    const msg = await prisma.messages.findUnique({ where: { id } });
-    if (!msg || String(msg.sender_id) !== String(socket.user.id)) return;
+  const msgId = Number(id);
+  if (isNaN(msgId)) return;
 
-    const files = msg.files || [];
-
-    if (files.length) {
-      const paths = files.map(f => f.path).filter(Boolean);
-      if (paths.length) {
-        await supabase.storage.from("images").remove(paths);
-      }
-    }
-
-    await prisma.messages.delete({ where: { id } });
-
-    io.to(`channel_${msg.channel_id}`).emit("messageDeleted", { id });
+  const msg = await prisma.messages.findUnique({
+    where: { id: msgId },
   });
 
-  // ================= PIN =================
+  if (!msg || String(msg.sender_id) !== String(socket.user.id)) return;
+
+  // ✅ FIX HERE
+  let files = [];
+  try {
+    files = JSON.parse(msg.files || "[]");
+  } catch {
+    files = [];
+  }
+
+  if (Array.isArray(files) && files.length) {
+    const paths = files.map(f => f.path).filter(Boolean);
+    if (paths.length) {
+      await supabase.storage.from("images").remove(paths);
+    }
+  }
+
+  await prisma.messages.delete({ where: { id: msgId } });
+
+  io.to(`channel_${msg.channel_id}`).emit("messageDeleted", { id: msgId });
+});
+
+
+  // ================= PIN/UNPIN =================
   socket.on("pinMessage", async ({ messageId, channel_id }) => {
+    let string_msgID = Number(messageId);
     await prisma.messages.update({
-      where: { id: messageId },
+      where: { id: string_msgID },
       data: { pinned: true },
     });
-
+    
     io.to(`channel_${channel_id}`).emit("messagePinned", {
-      messageId,
+      messageId:string_msgID,
       pinned: true,
     });
   });
-
+  
   socket.on("unpinMessage", async ({ messageId, channel_id }) => {
+    let string_msgID = Number(messageId);
     await prisma.messages.update({
-      where: { id: messageId },
+      where: { id: string_msgID },
       data: { pinned: false },
     });
 
     io.to(`channel_${channel_id}`).emit("messageUnpinned", {
-      messageId,
+      messageId: string_msgID,
       pinned: false,
     });
   });
+
+  // ================= REACTIONS =================
+
+// ================= REACT =================
+socket.on("reactMessage", async ({ messageId, emoji }) => {
+  try {
+    if (!messageId || !emoji) return;
+
+    const msgId = Number(messageId);
+
+    // 1️⃣ Fetch message
+    const msg = await prisma.messages.findUnique({
+      where: { id: msgId },
+      select: {
+        id: true,
+        channel_id: true,
+        reactions: true,
+      },
+    });
+
+    if (!msg) return;
+
+    const channel_id = msg.channel_id;
+
+    // 2️⃣ Parse reactions
+    let reactions = [];
+    try {
+      reactions = JSON.parse(msg.reactions || "[]");
+    } catch {
+      reactions = [];
+    }
+
+    const userId = String(socket.user.id);
+
+    // 3️⃣ Toggle logic
+    let entry = reactions.find(r => r.emoji === emoji);
+
+    if (entry) {
+      const users = Array.isArray(entry.users) ? entry.users : [];
+      const hasReacted = users.includes(userId);
+
+      if (hasReacted) {
+        const newUsers = users.filter(u => u !== userId);
+        if (newUsers.length === 0) {
+          reactions = reactions.filter(r => r.emoji !== emoji);
+        } else {
+          entry.users = newUsers;
+          entry.count = newUsers.length;
+        }
+      } else {
+        const newUsers = [...users, userId];
+        entry.users = newUsers;
+        entry.count = newUsers.length;
+      }
+    } else {
+      reactions.push({
+        emoji,
+        count: 1,
+        users: [userId],
+      });
+    }
+
+    // 4️⃣ Save to DB
+    await prisma.messages.update({
+      where: { id: msgId },
+      data: {
+        reactions: JSON.stringify(reactions),
+      },
+    });
+
+    // 5️⃣ Fetch user names
+    const userIds = new Set();
+    reactions.forEach(r => r.users.forEach(u => userIds.add(Number(u))));
+
+    const users = await prisma.users.findMany({
+      where: { id: { in: [...userIds] } },
+      select: { id: true, name: true },
+    });
+
+    const userMap = Object.fromEntries(users.map(u => [u.id, u.name]));
+
+    // 6️⃣ Convert reactions to UI-friendly format
+    const reactionsWithNames = reactions.map(r => ({
+      emoji: r.emoji,
+      count: r.count,
+      users: r.users.map(uid => ({
+        id: Number(uid),
+        name: userMap[Number(uid)] || "Unknown",
+      })),
+    }));
+
+    // 7️⃣ Emit to channel
+    io.to(`channel_${channel_id}`).emit("reactionUpdated", {
+      messageId: msgId,
+      reactions: reactionsWithNames,
+    });
+
+  } catch (err) {
+    console.error("reactMessage error:", err);
+  }
+});
+
+
+
 }

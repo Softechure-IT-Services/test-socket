@@ -4,6 +4,8 @@ import db from "../config/db.js";
 import verifyToken from "../middleware/auth.js";
 import prisma from "../config/prisma.js";
 import { getChannelFiles, getChannelPinnedMessages } from "../controllers/channel.controller.js";
+
+router.use(verifyToken);
 // import verifyToken from "../middleware/auth.js";
 
 // router.use(verifyToken);
@@ -11,7 +13,7 @@ import { getChannelFiles, getChannelPinnedMessages } from "../controllers/channe
 // new
 router.get("/", async (req, res) => {
   try {
-    const userId = 87;
+    const userId = req.user.id;
     const getDms = req.query.get_dms !== "false";
 
     const channels = await prisma.channels.findMany({
@@ -181,7 +183,7 @@ router.post("/", async (req, res) => {
     const { name, isPrivate, memberIds = [] } = req.body;
 
     // TEMP: hard-coded user (replace with req.user.id later)
-    const userId = 87;
+    const userId = req.user.id;
 
     if (!name || !name.trim()) {
       return res.status(400).json({ error: "Channel name required" });
@@ -244,7 +246,7 @@ router.post("/", async (req, res) => {
 });
 
 router.post("/:channelId/join", async (req, res) => {
-  const userId = 87;
+  const userId = req.user.id;
   const channelId = Number(req.params.channelId);
 
   try {
@@ -328,7 +330,7 @@ router.get("/:id", verifyToken, async (req, res) => {
 router.post("/:channelId/pin/:messageId", async (req, res) => {
   const channelId = Number(req.params.channelId);
   const messageId = Number(req.params.messageId);
-  const userId = 87;
+  const userId = req.user.id;
 
   try {
     const channel = await prisma.channels.findUnique({
@@ -433,7 +435,7 @@ router.delete("/:channelId/pin/:messageId", async (req, res) => {
   const channelId = Number(req.params.channelId);
   const messageId = Number(req.params.messageId);
   // const userId = req.user.id;
-  const userId = 87;
+  const userId = req.user.id;
 
   try {
     const message = await prisma.messages.findFirst({
