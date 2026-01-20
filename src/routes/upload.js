@@ -53,7 +53,7 @@ router.post("/", upload.array("files", 10), async (req, res) => {
 
       if (error) {
         console.error("Supabase upload error:", error);
-        return res.status(500).json({ error: "Upload failed" });
+        return res.status(500).json({ error: error.message });
       }
 
       const { data: signed } = await supabase.storage

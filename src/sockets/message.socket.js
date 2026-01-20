@@ -25,7 +25,7 @@ export default function registerMessageSockets(io, socket) {
       id: message.id,
       channel_id: message.channel_id,
       content: message.content,
-      files: message.files || [],
+      files: JSON.parse(message.files || "[]"),
       sender_id: message.sender_id,
       sender_name: socket.user.name,
       avatar_url: socket.user.avatar_url,
