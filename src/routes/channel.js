@@ -4,6 +4,7 @@ import db from "../config/db.js";
 import verifyToken from "../middleware/auth.js";
 import prisma from "../config/prisma.js";
 import { io } from "../sockets/index.js";
+import { getChannelFiles, getChannelPinnedMessages } from "../controllers/channel.controller.js";
 
 router.use(verifyToken);
 
@@ -43,6 +44,8 @@ router.get("/", async (req, res) => {
 router.get("/:channelId/messages", async (req, res) => {
   try {
     const channelId = Number(req.params.channelId);
+    const limit = Number(req.query.limit) || 20;
+    const cursor = req.query.cursor ? Number(req.query.cursor) : null;
 
     const messages = await prisma.messages.findMany({
       where: {
@@ -57,26 +60,35 @@ router.get("/:channelId/messages", async (req, res) => {
         },
       },
       orderBy: {
-        id: "asc",
+        id: "desc", // newest first
       },
-      take: 50,
+      take: limit,
+      ...(cursor && {
+        cursor: { id: cursor },
+        skip: 1, // skip the cursor message itself
+      }),
     });
 
-    const formatted = messages.map(m => ({
-      id: m.id,
-      channel_id: m.channel_id,
-      sender_id: m.sender_id,
-      content: m.content,
-      files: m.files,
-      reactions: m.reactions,
-      pinned: m.pinned,
-      created_at: m.created_at,
-      updated_at: m.updated_at,
-      sender_name: m.users?.name ?? null,
-      avatar_url: m.users?.avatar_url ?? null,
-    }));
+    const formatted = messages
+      .map(m => ({
+        id: m.id,
+        channel_id: m.channel_id,
+        sender_id: m.sender_id,
+        content: m.content,
+        files: m.files,
+        reactions: m.reactions,
+        pinned: m.pinned,
+        created_at: m.created_at,
+        updated_at: m.updated_at,
+        sender_name: m.users?.name ?? null,
+        avatar_url: m.users?.avatar_url ?? null,
+      }))
+      .reverse(); // oldest → newest for UI
 
-    res.json(formatted);
+    res.json({
+      messages: formatted,
+      nextCursor: messages.length ? messages[messages.length - 1].id : null,
+    });
   } catch (err) {
     console.error("Prisma messages error:", err);
     res.status(500).json({
@@ -103,7 +115,7 @@ router.get("/:channelId/members", async (req, res) => {
       },
     });
 
-    res.json(members.map(m => m.users));
+    res.json(members.map((m) => m.users));
   } catch (err) {
     res.status(500).json({ error: "DB Error" });
   }
@@ -122,9 +134,7 @@ router.post("/", async (req, res) => {
 
     // ❌ Private channel must have members
     if (isPrivate && memberIds.length === 0) {
-      return res
-        .status(400)
-        .json({ error: "Private channel needs members" });
+      return res.status(400).json({ error: "Private channel needs members" });
     }
 
     const result = await prisma.$transaction(async (tx) => {
@@ -147,13 +157,10 @@ router.post("/", async (req, res) => {
         };
       }
 
-
       // res.json(memberIds);
 
       // 🔒 PRIVATE CHANNEL → ADD MEMBERS
-      const uniqueMemberIds = Array.from(
-        new Set([userId, ...memberIds])
-      );
+      const uniqueMemberIds = Array.from(new Set([userId, ...memberIds]));
 
       await tx.channel_members.createMany({
         data: uniqueMemberIds.map((uid) => ({
@@ -231,24 +238,27 @@ router.get("/:id", verifyToken, async (req, res) => {
   const userId = req.user.id; // get logged-in user from middleware
 
   try {
-    const channel = await prisma.channels.findUnique({ where: { id: channelId } });
+    const channel = await prisma.channels.findUnique({
+      where: { id: channelId },
+    });
     if (!channel) return res.status(404).json({ error: "Not found" });
 
-   if (channel.is_dm) {
-  const dmUser = await prisma.channel_members.findFirst({
-    where: {
-      channel_id: channelId,
-      user_id: { not: userId }, // only gets the "other" user
-    },
-    include: { users: { select: { id: true, name: true, avatar_url: true } } },
-  });
+    if (channel.is_dm) {
+      const dmUser = await prisma.channel_members.findFirst({
+        where: {
+          channel_id: channelId,
+          user_id: { not: userId }, // only gets the "other" user
+        },
+        include: {
+          users: { select: { id: true, name: true, avatar_url: true } },
+        },
+      });
 
-  return res.json({
-    channel,
-    dm_user: dmUser?.users ?? null,
-  });
-}
-
+      return res.json({
+        channel,
+        dm_user: dmUser?.users ?? null,
+      });
+    }
 
     // Normal channel
     const members = await prisma.channel_members.findMany({
@@ -256,7 +266,7 @@ router.get("/:id", verifyToken, async (req, res) => {
       include: { users: { select: { id: true, name: true, email: true } } },
     });
 
-    res.json({ channel, members: members.map(m => m.users) });
+    res.json({ channel, members: members.map((m) => m.users) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "DB Error" });
@@ -324,6 +334,13 @@ router.post("/:channelId/pin/:messageId", async (req, res) => {
     res.status(500).json({ error: "DB Error" });
   }
 });
+
+
+
+// files and pin api
+router.get("/:channelId/files", getChannelFiles);
+router.get("/:channelId/pinned", getChannelPinnedMessages);
+// files and pin api end
 
 router.delete("/:channelId/pin/:messageId", async (req, res) => {
   const channelId = Number(req.params.channelId);
