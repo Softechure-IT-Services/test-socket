@@ -4,7 +4,7 @@ import db from "../config/db.js";
 import verifyToken from "../middleware/auth.js";
 import prisma from "../config/prisma.js";
 import { io } from "../sockets/index.js";
-import { getChannelFiles, getChannelPinnedMessages } from "../controllers/channel.controller.js";
+import { getChannelFiles, getChannelPinnedMessages, createOrCheckChannel } from "../controllers/channel.controller.js";
 
 router.use(verifyToken);
 
@@ -121,80 +121,87 @@ router.get("/:channelId/members", async (req, res) => {
   }
 });
 
-router.post("/", async (req, res) => {
-  try {
-    const { name, isPrivate, memberIds = [] } = req.body;
+// router.post("/", async (req, res) => {
+//   try {
+//     const { name, isPrivate, memberIds = [] } = req.body;
 
-    // TEMP: hard-coded user (replace with req.user.id later)
-    const userId = req.user.id;
+//     // TEMP: hard-coded user (replace with req.user.id later)
+//     const userId = req.user.id;
 
-    if (!name || !name.trim()) {
-      return res.status(400).json({ error: "Channel name required" });
-    }
+//     if (!name || !name.trim()) {
+//       return res.status(400).json({ error: "Channel name required" });
+//     }
 
-    // ❌ Private channel must have members
-    if (isPrivate && memberIds.length === 0) {
-      return res.status(400).json({ error: "Private channel needs members" });
-    }
+//     // ❌ Private channel must have members
+//     if (isPrivate && memberIds.length === 0) {
+//       return res.status(400).json({ error: "Private channel needs members" });
+//     }
 
-    const result = await prisma.$transaction(async (tx) => {
-      // 1️⃣ Create channel
-      const channel = await tx.channels.create({
-        data: {
-          name: name.trim(),
-          is_private: isPrivate ?? false,
-          is_dm: false,
-          created_by: userId,
-        },
-      });
+//     const result = await prisma.$transaction(async (tx) => {
+//       // 1️⃣ Create channel
+//       const channel = await tx.channels.create({
+//         data: {
+//           name: name.trim(),
+//           is_private: isPrivate ?? false,
+//           is_dm: false,
+//           created_by: userId,
+//         },
+//       });
 
-      // 🟢 PUBLIC CHANNEL → NO MEMBERS
-      if (!isPrivate) {
-        return {
-          id: channel.id,
-          name: channel.name,
-          isPrivate: false,
-        };
-      }
+//       // 🟢 PUBLIC CHANNEL → NO MEMBERS
+//       if (!isPrivate) {
+//         return {
+//           id: channel.id,
+//           name: channel.name,
+//           isPrivate: false,
+//         };
+//       }
 
-      // res.json(memberIds);
+//       // res.json(memberIds);
 
-      // 🔒 PRIVATE CHANNEL → ADD MEMBERS
-      const uniqueMemberIds = Array.from(new Set([userId, ...memberIds]));
+//       // 🔒 PRIVATE CHANNEL → ADD MEMBERS
+//       const uniqueMemberIds = Array.from(new Set([userId, ...memberIds]));
 
-      await tx.channel_members.createMany({
-        data: uniqueMemberIds.map((uid) => ({
-          channel_id: channel.id,
-          user_id: uid,
-        })),
-        skipDuplicates: true, // matches INSERT IGNORE behavior
-      });
+//       await tx.channel_members.createMany({
+//         data: uniqueMemberIds.map((uid) => ({
+//           channel_id: channel.id,
+//           user_id: uid,
+//         })),
+//         skipDuplicates: true, // matches INSERT IGNORE behavior
+//       });
 
-      return {
-        id: channel.id,
-        name: channel.name,
-        isPrivate: true,
-        members: uniqueMemberIds,
-      };
-    });
+//       return {
+//         id: channel.id,
+//         name: channel.name,
+//         isPrivate: true,
+//         members: uniqueMemberIds,
+//       };
+//     });
 
-    res.status(201).json(result);
-    io.emit("channelCreated", {
-      id: result.id,
-      name: result.name,
-      isPrivate: result.isPrivate,
-    });
-  } catch (err) {
-    console.error("Create channel error:", err);
-    res.status(500).json({
-      error: "Channel creation failed",
-      details: err.message,
-    });
-  }
-});
+//     res.status(201).json(result);
+//     io.emit("channelCreated", {
+//       id: result.id,
+//       name: result.name,
+//       isPrivate: result.isPrivate,
+//     });
+//   } catch (err) {
+//     console.error("Create channel error:", err);
+//     res.status(500).json({
+//       error: "Channel creation failed",
+//       details: err.message,
+//     });
+//   }
+// });
+
+
+// new
+router.post("/", createOrCheckChannel);
+// new end
+
 
 router.post("/:channelId/join", async (req, res) => {
   const userId = req.user.id;
+
   const channelId = Number(req.params.channelId);
 
   try {
