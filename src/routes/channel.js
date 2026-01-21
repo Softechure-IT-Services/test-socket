@@ -4,7 +4,7 @@ import db from "../config/db.js";
 import verifyToken from "../middleware/auth.js";
 import prisma from "../config/prisma.js";
 import { io } from "../sockets/index.js";
-import { getChannelFiles, getChannelPinnedMessages } from "../controllers/channel.controller.js";
+import { getChannelFiles, getChannelPinnedMessages  } from "../controllers/channel.controller.js";
 
 router.use(verifyToken);
 
@@ -102,6 +102,21 @@ router.get("/:channelId/members", async (req, res) => {
   try {
     const channelId = Number(req.params.channelId);
 
+    // 1️⃣ Get channel info
+    const channel = await prisma.channels.findUnique({
+      where: { id: channelId },
+      select: {
+        id: true,
+        name: true,
+        is_private: true,
+      },
+    });
+
+    if (!channel) {
+      return res.status(404).json({ error: "Channel not found" });
+    }
+
+    // 2️⃣ Get members
     const members = await prisma.channel_members.findMany({
       where: { channel_id: channelId },
       include: {
@@ -110,16 +125,24 @@ router.get("/:channelId/members", async (req, res) => {
             id: true,
             name: true,
             email: true,
+            avatar_url: true,
           },
         },
       },
     });
 
-    res.json(members.map((m) => m.users));
+    // 3️⃣ Return combined response
+    res.json({
+      channel,
+      members: members.map((m) => m.users),
+    });
+
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "DB Error" });
   }
 });
+
 
 router.post("/", async (req, res) => {
   try {
@@ -412,5 +435,75 @@ router.get("/:channelId/pins", (req, res) => {
     res.json(rows);
   });
 });
+
+router.post("/:channelId/leave", async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const channelId = Number(req.params.channelId);
+
+    if (!channelId) {
+      return res.status(400).json({ error: "Invalid channel id" });
+    }
+
+    // Check channel exists
+    const channel = await prisma.channels.findUnique({
+      where: { id: channelId },
+      select: { id: true, is_private: true, is_dm: true },
+    });
+
+    if (!channel) {
+      return res.status(404).json({ error: "Channel not found" });
+    }
+
+    if (channel.is_dm) {
+      return res.status(400).json({ error: "Cannot leave DM channel" });
+    }
+
+    // Check membership
+    const membership = await prisma.channel_members.findUnique({
+      where: {
+        channel_id_user_id: {
+          channel_id: channelId,
+          user_id: userId,
+        },
+      },
+    });
+
+    if (!membership) {
+      return res.status(400).json({ error: "You are not a member of this channel" });
+    }
+
+    // Remove membership
+    await prisma.channel_members.delete({
+      where: {
+        channel_id_user_id: {
+          channel_id: channelId,
+          user_id: userId,
+        },
+      },
+    });
+
+    // OPTIONAL: if private channel and no members left → delete channel
+    if (channel.is_private) {
+      const remaining = await prisma.channel_members.count({
+        where: { channel_id: channelId },
+      });
+
+      if (remaining === 0) {
+        await prisma.channels.delete({ where: { id: channelId } });
+      }
+    }
+
+    io.to(`channel_${channelId}`).emit("userLeftChannel", {
+      channelId,
+      userId,
+    });
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("Leave channel error:", err);
+    res.status(500).json({ error: "Failed to leave channel" });
+  }
+});
+
 
 export default router;

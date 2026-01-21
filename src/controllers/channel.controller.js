@@ -14,9 +14,11 @@ export const getChannelFiles = async (req, res) => {
     const messages = await prisma.messages.findMany({
       where: {
         channel_id: channelId,
-        files: {
-          not: null,
-        },
+        AND:[
+          { files: { not: null } },
+          { files: { not: "[]" } },
+          { files: { not: "" } },
+        ]
       },
       select: {
         id: true,
