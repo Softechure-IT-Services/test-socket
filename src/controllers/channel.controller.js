@@ -156,9 +156,7 @@ export const getChannelPinnedMessages = async (req, res) => {
     const messages = await prisma.messages.findMany({
       where: {
         channel_id: channelId,
-        pinned: {
-          not: null,
-        },
+       pinned:true,
       },
       select: {
         id: true,
@@ -214,8 +212,8 @@ export const getChannelPinnedMessages = async (req, res) => {
 export const createOrCheckChannel = async (req, res) => {
   try {
     const { name, isPrivate, memberIds = [], create = false } = req.body;
-    // const userId = req.user.id;
-    const userId = 87;
+    const userId = req.user.id;
+    // const userId = 87;
 
     if (!name || !name.trim()) {
       return res.status(400).json({
@@ -308,11 +306,30 @@ export const createOrCheckChannel = async (req, res) => {
     });
 
     // 📢 Socket event
-    io.emit("channelCreated", {
+    // io.emit("channelCreated", {
+    //   id: result.id,
+    //   name: result.name,
+    //   isPrivate: result.isPrivate,
+    // });
+
+    // 🔒 Only private members
+if (result.isPrivate && result.members?.length > 0) {
+  result.members.forEach((uid) => {
+    io.to(`user_${uid}`).emit("channelCreated", {
       id: result.id,
       name: result.name,
-      isPrivate: result.isPrivate,
+      isPrivate: true,
+      members: result.members,
     });
+  });
+} else {
+  // Public channel → emit to everyone
+  io.emit("channelCreated", {
+    id: result.id,
+    name: result.name,
+    isPrivate: false,
+  });
+}
 
     res.status(201).json({
       success: true,
@@ -322,7 +339,7 @@ export const createOrCheckChannel = async (req, res) => {
     console.error("Create channel error:", err);
     res.status(500).json({
       success: false,
-      message: "Channel creation failed",
+      message: err.message,
     });
   }
 };

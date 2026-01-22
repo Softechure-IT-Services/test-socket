@@ -41,15 +41,88 @@ router.get("/", async (req, res) => {
   }
 });
 
-router.get("/:channelId/messages", async (req, res) => {
-  try {
-    const channelId = Number(req.params.channelId);
-    const limit = Number(req.query.limit) || 20;
-    const cursor = req.query.cursor ? Number(req.query.cursor) : null;
+// router.get("/:channelId/messages", async (req, res) => {
+//   const channelId = Number(req.params.channelId);
+//   const limit = Number(req.query.limit) || 20;
+//   const cursor = req.query.cursor ? Number(req.query.cursor) : null;
+  
+//   const channel = await prisma.channels.findUnique({
+//   where: { id: channelId },
+//   include: { channel_members: true },
+// });
 
+// if (channel.is_private) {
+//   const memberIds = channel.channel_members.map((m) => m.user_id);
+//   if (!memberIds.includes(req.user.id)) {
+//     return res.status(403).json({ error: "Forbidden" });
+//   }
+// }
+
+//   try {
+
+//     const messages = await prisma.messages.findMany({
+//       where: {
+//         channel_id: channelId,
+//       },
+//       include: {
+//         users: {
+//           select: {
+//             name: true,
+//             avatar_url: true,
+//           },
+//         },
+//       },
+//       orderBy: {
+//         id: "desc", // newest first
+//       },
+//       take: limit,
+//       ...(cursor && {
+//         cursor: { id: cursor },
+//         skip: 1, // skip the cursor message itself
+//       }),
+//     });
+
+//     const formatted = messages
+//       .map(m => ({
+//         id: m.id,
+//         channel_id: m.channel_id,
+//         sender_id: m.sender_id,
+//         content: m.content,
+//         files: m.files,
+//         reactions: m.reactions,
+//         pinned: m.pinned,
+//         created_at: m.created_at,
+//         updated_at: m.updated_at,
+//         sender_name: m.users?.name ?? null,
+//         avatar_url: m.users?.avatar_url ?? null,
+//       }))
+//       .reverse(); // oldest → newest for UI
+
+//     res.json({
+//       messages: formatted,
+//       nextCursor: messages.length ? messages[messages.length - 1].id : null,
+//     });
+//   } catch (err) {
+//     console.error("Prisma messages error:", err);
+//     res.status(500).json({
+//       error: "DB Error",
+//       details: err.message,
+//     });
+//   }
+// });
+
+router.get("/:channelId/messages", async (req, res) => {
+  const channelId = Number(req.params.channelId);
+  const limit = Number(req.query.limit) || 20;
+  const cursor = req.query.cursor ? Number(req.query.cursor) : null;
+
+  // ... your channel membership checks ...
+
+  try {
     const messages = await prisma.messages.findMany({
       where: {
         channel_id: channelId,
+        ...(cursor && { id: { lt: cursor } }), // get older than cursor
       },
       include: {
         users: {
@@ -63,14 +136,10 @@ router.get("/:channelId/messages", async (req, res) => {
         id: "desc", // newest first
       },
       take: limit,
-      ...(cursor && {
-        cursor: { id: cursor },
-        skip: 1, // skip the cursor message itself
-      }),
     });
 
     const formatted = messages
-      .map(m => ({
+      .map((m) => ({
         id: m.id,
         channel_id: m.channel_id,
         sender_id: m.sender_id,
@@ -85,9 +154,12 @@ router.get("/:channelId/messages", async (req, res) => {
       }))
       .reverse(); // oldest → newest for UI
 
+    const nextCursor =
+      messages.length === limit ? messages[messages.length - 1].id : null;
+
     res.json({
       messages: formatted,
-      nextCursor: messages.length ? messages[messages.length - 1].id : null,
+      nextCursor,
     });
   } catch (err) {
     console.error("Prisma messages error:", err);
@@ -263,7 +335,7 @@ router.post("/:channelId/join", async (req, res) => {
   }
 });
 
-router.get("/:id", verifyToken, async (req, res) => {
+router.get("/:id", async (req, res) => {
   const channelId = Number(req.params.id);
   const userId = req.user.id; // get logged-in user from middleware
 

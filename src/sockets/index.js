@@ -18,7 +18,7 @@ export function initSocket(server) {
 
   io.on("connection", (socket) => {
     console.log("✅ User Connected:", socket.id, "user:", socket.user.id);
-
+    socket.join(`user_${socket.user.id}`);
     socket.emit("auth-success", { user: socket.user });
 
     registerChannelSockets(io, socket);

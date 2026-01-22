@@ -6,6 +6,17 @@ export default function registerMessageSockets(io, socket) {
   // ================= SEND =================
   socket.on("sendMessage", async ({ content, channel_id, files }) => {
     if (!channel_id || (!content && (!files || !files.length))) return;
+  //     const isMember = await prisma.channel_members.findFirst({
+  //   where: {
+  //     channel_id: channel_id,
+  //     user_id: socket.user.id,
+  //   },
+  // });
+
+  // if (!isMember) {
+  //   return socket.emit("error", { message: "Not allowed to message in this channel" });
+  // }
+
 
     const sender_id = socket.user.id;
 
