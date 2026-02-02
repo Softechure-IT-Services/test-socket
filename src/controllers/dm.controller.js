@@ -1,0 +1,163 @@
+import prisma from "../config/prisma.js";
+import { io } from "../sockets/index.js";
+
+/**
+ * Create or get existing DM between two users
+ */
+export const createOrGetDM = async (req, res) => {
+  // TEMP: hardcoded until auth middleware is enabled
+  const userId = req.user.id;
+  const otherUserId = Number(req.params.otherUserId);
+
+  if (!otherUserId || otherUserId === userId) {
+    return res.status(400).json({ error: "Invalid user" });
+  }
+
+  try {
+    // 1️⃣ Check if DM already exists
+//   const existingDM = await prisma.channels.findFirst({
+//   where: {
+//     is_dm: true,
+//     channel_members: {
+//       some: { user_id: userId },
+//     },
+//     AND: {
+//       channel_members: {
+//         some: { user_id: otherUserId },
+//       },
+//     },
+//     // Ensure there are only 2 members
+//     channel_members: {
+//       length: 2,
+//     },
+//   },
+//   select: { id: true },
+// });
+
+const existingDMs = await prisma.channels.findMany({
+  where: { is_dm: true },
+  include: { channel_members: true },
+});
+
+const existingDM = existingDMs.find((c) => {
+  const memberIds = c.channel_members.map((m) => m.user_id).sort();
+  return memberIds.length === 2 && memberIds[0] === Math.min(userId, otherUserId) && memberIds[1] === Math.max(userId, otherUserId);
+});
+
+
+    if (existingDM) {
+      return res.json({ dm_id: existingDM.id });
+    }
+
+    // 2️⃣ Create DM + members in transaction
+    const dmChannel = await prisma.$transaction(async (tx) => {
+      return tx.channels.create({
+        data: {
+          name: "DM",
+          is_private: true,
+          is_dm: true,
+          created_by: userId,
+          channel_members: {
+            create: [
+              { user_id: userId },
+              { user_id: otherUserId },
+            ],
+          },
+        },
+select: { id: true, name: true, is_private: true },
+      });
+    });
+const creator = await prisma.users.findUnique({
+  where: { id: userId },
+  select: { id: true, name: true, avatar_url: true },
+});
+
+const other = await prisma.users.findUnique({
+  where: { id: otherUserId },
+  select: { id: true, name: true, avatar_url: true },
+});
+
+// Emit full DM info
+// io.emit("dmCreated", {
+//   channel_id: dmChannel.id,
+//   members: [creator, other],
+// });
+
+// After creating DM
+[creator.id, other.id].forEach((uid) => {
+  io.to(`user_${uid}`).emit("dmCreated", {
+    channel_id: dmChannel.id,
+    members: [creator, other],
+  });
+});
+
+
+
+
+    res.json({ dm_id: dmChannel.id });
+  } catch (err) {
+    console.error("DM creation error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * List all DMs for logged-in user
+ */
+export const listMyDMs = async (req, res) => {
+  const userId = req.user.id;
+
+  if (!userId) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const dms = await prisma.channels.findMany({
+      where: {
+        is_dm: true,
+        channel_members: {
+          some: {
+            user_id: userId,
+          },
+        },
+      },
+      orderBy: { id: "desc" },
+      select: {
+        id: true,
+        is_private: true,
+        is_dm: true,
+        channel_members: {
+          where: {
+            user_id: { not: userId },
+          },
+          select: {
+            users: {
+              select: {
+                id: true,
+                name: true,
+                avatar_url: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const result = dms.map((dm) => {
+      const otherUser = dm.channel_members[0]?.users;
+      return {
+        id: dm.id,
+        other_user_id: otherUser?.id,
+        name: otherUser?.name,
+        avatar_url: otherUser?.avatar_url,
+        is_private: dm.is_private,
+        is_dm: dm.is_dm,
+      };
+    });
+
+    res.json(result);
+  } catch (err) {
+    console.error("DM fetch error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};

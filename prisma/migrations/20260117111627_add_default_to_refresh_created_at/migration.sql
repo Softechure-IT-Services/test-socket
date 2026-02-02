@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE `refresh_tokens` MODIFY `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3);
