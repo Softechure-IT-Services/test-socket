@@ -584,5 +584,94 @@ router.post("/:channelId/leave", async (req, res) => {
   }
 });
 
+router.get("/messages/:messageId/download", async (req, res) => {
+  const messageId = Number(req.params.messageId);
+  const userId = req.user.id;
+
+  try {
+    const message = await prisma.messages.findUnique({
+      where: { id: messageId },
+      select: {
+        files: true,
+        channel_id: true,
+      },
+    });
+
+    if (!message || !message.files) {
+      return res.status(404).json({ error: "File not found" });
+    }
+
+    // 🔐 Check channel access
+    const isMember = await prisma.channel_members.findFirst({
+      where: {
+        channel_id: message.channel_id,
+        user_id: userId,
+      },
+    });
+
+    if (!isMember) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    // 🧠 Resolve file path
+    const filePath = path.join(
+      process.cwd(),
+      "uploads",
+      message.files
+    );
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "File missing on server" });
+    }
+
+    // ✅ THIS triggers browser download
+    res.download(filePath);
+  } catch (err) {
+    console.error("Download error:", err);
+    res.status(500).json({ error: "Download failed" });
+  }
+});
+
+
+router.post(
+  "/messages/:messageId/forward/:channelId",
+  async (req, res) => {
+    const messageId = Number(req.params.messageId);
+    const channelId = Number(req.params.channelId);
+    const userId = req.user.id;
+
+    try {
+      const original = await prisma.messages.findUnique({
+        where: { id: messageId },
+        select: {
+          files: true,
+        },
+      });
+
+      if (!original || !original.files) {
+        return res.status(404).json({ error: "File not found" });
+      }
+
+      const newMessage = await prisma.messages.create({
+        data: {
+          channel_id: channelId,
+          sender_id: userId,
+          content: null,
+          files: original.files,
+        },
+      });
+
+      io.to(`channel_${channelId}`).emit("newMessage", newMessage);
+
+      res.json({ success: true, message: newMessage });
+    } catch (err) {
+      console.error("Forward error:", err);
+      res.status(500).json({ error: "Forward failed" });
+    }
+  }
+);
+
+
+
 
 export default router;
