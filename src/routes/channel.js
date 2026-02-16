@@ -5,6 +5,8 @@ import verifyToken from "../middleware/auth.js";
 import prisma from "../config/prisma.js";
 import { io } from "../sockets/index.js";
 import { getChannelFiles, getChannelPinnedMessages, createOrCheckChannel } from "../controllers/channel.controller.js";
+import path from "path";
+import fs from "fs";
 
 router.use(verifyToken);
 
@@ -598,10 +600,10 @@ router.get("/messages/:messageId/download", async (req, res) => {
     });
 
     if (!message || !message.files) {
-      return res.status(404).json({ error: "File not found" });
+      return res.status(404).json({ error: "File not found in message" });
     }
 
-    // 🔐 Check channel access
+    // 🔐 access check
     const isMember = await prisma.channel_members.findFirst({
       where: {
         channel_id: message.channel_id,
@@ -613,22 +615,19 @@ router.get("/messages/:messageId/download", async (req, res) => {
       return res.status(403).json({ error: "Forbidden" });
     }
 
-    // 🧠 Resolve file path
-    const filePath = path.join(
-      process.cwd(),
-      "uploads",
-      message.files
-    );
+    // ✅ IMPORTANT: adjust uploads path to your project
+    const filePath = path.resolve("uploads", message.files);
 
     if (!fs.existsSync(filePath)) {
+      console.error("FILE NOT FOUND:", filePath);
       return res.status(404).json({ error: "File missing on server" });
     }
 
-    // ✅ THIS triggers browser download
-    res.download(filePath);
+    // ✅ This sends the file
+    return res.download(filePath);
   } catch (err) {
-    console.error("Download error:", err);
-    res.status(500).json({ error: "Download failed" });
+    console.error("DOWNLOAD ERROR:", err);
+    return res.status(500).json({ error: "Download failed" });
   }
 });
 
