@@ -16,12 +16,12 @@ const allowedOrigins = [
   "http://192.168.1.14:3000",
   "http://192.168.1.15:3000",
   "http://192.168.0.113:5000",
-  "https://test-socket-client-steel.vercel.app",
+  "https://softechat.vercel.app",
   process.env.CLIENT_URL,
 ].filter(Boolean);
 
 app.use(cors({
-  origin: process.env.NODE_ENV === "production" ? "https://test-socket-client-steel.vercel.app" : allowedOrigins,
+  origin: process.env.NODE_ENV === "production" ? "https://softechat.vercel.app" : allowedOrigins,
   credentials: true,
 }));
 
