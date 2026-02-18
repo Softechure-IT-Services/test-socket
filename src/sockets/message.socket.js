@@ -109,18 +109,23 @@ export default function registerMessageSockets(io, socket) {
 
 
   // ================= PIN/UNPIN =================
-  socket.on("pinMessage", async ({ messageId, channel_id }) => {
-    let string_msgID = Number(messageId);
-    await prisma.messages.update({
-      where: { id: string_msgID },
-      data: { pinned: true },
-    });
-    
-    io.to(`channel_${channel_id}`).emit("messagePinned", {
-      messageId:string_msgID,
-      pinned: true,
-    });
+socket.on("pinMessage", async ({ messageId, channel_id }) => {
+  if (!messageId || !channel_id) return;
+
+  const msgId = Number(messageId);
+  const chId = Number(channel_id);
+
+  const updated = await prisma.messages.update({
+    where: { id: msgId },
+    data: { pinned: true },
   });
+
+  io.to(`channel_${chId}`).emit("messagePinned", {
+    messageId: msgId,
+    pinned: updated.pinned,
+  });
+});
+
   
   socket.on("unpinMessage", async ({ messageId, channel_id }) => {
     let string_msgID = Number(messageId);
