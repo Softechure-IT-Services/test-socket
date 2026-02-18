@@ -210,6 +210,7 @@ export const getChannelPinnedMessages = async (req, res) => {
 
 
 export const createOrCheckChannel = async (req, res) => {
+  console.log("Authenticated user:", req.user);
   try {
     const { name, isPrivate, memberIds = [], create = false } = req.body;
     const userId = req.user.id;

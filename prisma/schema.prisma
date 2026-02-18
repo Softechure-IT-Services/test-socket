@@ -22,7 +22,7 @@ model channel_members {
 
 model channels {
   id              Int               @id @default(autoincrement())
-  name            String?           @db.VarChar(255)
+  name            String? @unique          @db.VarChar(255)
   description     String?           @db.Text
   is_private      Boolean?          @default(false)
   is_dm           Boolean?          @default(false)

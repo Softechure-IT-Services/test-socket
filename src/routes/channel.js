@@ -10,6 +10,100 @@ import fs from "fs";
 
 router.use(verifyToken);
 
+router.get("/search-user-and-channel", async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const rawQuery = req.query.q;
+    const query =
+      typeof rawQuery === "string" ? rawQuery.toLowerCase() : "";
+
+    if (!query) return res.json([]);
+
+    // const channels = await prisma.channels.findMany({
+    //   where: {
+    //     channel_members: {
+    //       some: {
+    //         user_id: userId,
+    //       },
+    //     },
+    //   },
+    //   include: {
+    //     channel_members: {
+    //       include: {
+    //         users: true,
+    //       },
+    //     },
+    //   },
+    //   orderBy: {
+    //     created_at: "desc",
+    //   },
+    // });
+
+    const channels = await prisma.channels.findMany({
+  where: {
+    OR: [
+      { is_private: false }, // public channels
+      {
+        channel_members: {
+          some: { user_id: userId }, // private channels where user is member
+        },
+      },
+    ],
+  },
+  include: {
+    channel_members: {
+      include: {
+        users: true,
+      },
+    },
+  },
+  orderBy: {
+    created_at: "desc",
+  },
+});
+
+
+    const results = [];
+
+    for (const channel of channels) {
+      // 🔹 DM
+      if (channel.is_dm) {
+        const otherMember = channel.channel_members.find(
+          (m) => m.user_id !== userId
+        );
+
+        const otherName = otherMember?.users?.name;
+
+        if (!otherName) continue;
+
+        if (otherName.toLowerCase().includes(query)) {
+          results.push({
+            id: channel.id,
+            name: otherName,
+            kind: "dm",
+          });
+        }
+
+        continue;
+      }
+
+      // 🔹 Normal channel
+      if (channel.name?.toLowerCase().includes(query)) {
+        results.push({
+          id: channel.id,
+          name: channel.name,
+          kind: "channel",
+        });
+      }
+    }
+
+    res.json(results);
+  } catch (err) {
+    console.error("SEARCH ERROR FULL:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 router.get("/", async (req, res) => {
   try {
     const userId = req.user.id;
@@ -289,6 +383,7 @@ router.get("/:channelId/members", async (req, res) => {
 //     });
 //   }
 // });
+
 
 
 // new
@@ -586,27 +681,28 @@ router.post("/:channelId/leave", async (req, res) => {
   }
 });
 
-router.get("/messages/:messageId/download", async (req, res) => {
-  const messageId = Number(req.params.messageId);
+router.get("/files/:fileId/download", async (req, res) => {
+  const fileId = Number(req.params.fileId);
   const userId = req.user.id;
 
   try {
-    const message = await prisma.messages.findUnique({
-      where: { id: messageId },
+    const file = await prisma.files.findUnique({
+      where: { id: fileId },
       select: {
-        files: true,
+        path: true,
         channel_id: true,
+        name: true,
       },
     });
 
-    if (!message || !message.files) {
-      return res.status(404).json({ error: "File not found in message" });
+    if (!file) {
+      return res.status(404).json({ error: "File not found" });
     }
 
-    // 🔐 access check
+    // 🔐 check channel membership
     const isMember = await prisma.channel_members.findFirst({
       where: {
-        channel_id: message.channel_id,
+        channel_id: file.channel_id,
         user_id: userId,
       },
     });
@@ -615,18 +711,15 @@ router.get("/messages/:messageId/download", async (req, res) => {
       return res.status(403).json({ error: "Forbidden" });
     }
 
-    // ✅ IMPORTANT: adjust uploads path to your project
-    const filePath = path.resolve("uploads", message.files);
+    const filePath = path.resolve("uploads", file.path);
 
     if (!fs.existsSync(filePath)) {
-      console.error("FILE NOT FOUND:", filePath);
       return res.status(404).json({ error: "File missing on server" });
     }
 
-    // ✅ This sends the file
-    return res.download(filePath);
+    return res.download(filePath, file.name);
   } catch (err) {
-    console.error("DOWNLOAD ERROR:", err);
+    console.error(err);
     return res.status(500).json({ error: "Download failed" });
   }
 });
@@ -669,8 +762,6 @@ router.post(
     }
   }
 );
-
-
 
 
 export default router;
