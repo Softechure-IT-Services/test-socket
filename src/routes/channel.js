@@ -1,10 +1,16 @@
+// channel.js
+
 import express from "express";
 const router = express.Router();
 import db from "../config/db.js";
 import verifyToken from "../middleware/auth.js";
 import prisma from "../config/prisma.js";
 import { io } from "../sockets/index.js";
-import { getChannelFiles, getChannelPinnedMessages, createOrCheckChannel } from "../controllers/channel.controller.js";
+import {
+  getChannelFiles,
+  getChannelPinnedMessages,
+  createOrCheckChannel,
+} from "../controllers/channel.controller.js";
 import path from "path";
 import fs from "fs";
 
@@ -15,59 +21,36 @@ router.get("/search-user-and-channel", async (req, res) => {
     const userId = req.user.id;
 
     const rawQuery = req.query.q;
-    const query =
-      typeof rawQuery === "string" ? rawQuery.toLowerCase() : "";
+    const query = typeof rawQuery === "string" ? rawQuery.toLowerCase() : "";
 
     if (!query) return res.json([]);
 
-    // const channels = await prisma.channels.findMany({
-    //   where: {
-    //     channel_members: {
-    //       some: {
-    //         user_id: userId,
-    //       },
-    //     },
-    //   },
-    //   include: {
-    //     channel_members: {
-    //       include: {
-    //         users: true,
-    //       },
-    //     },
-    //   },
-    //   orderBy: {
-    //     created_at: "desc",
-    //   },
-    // });
-
     const channels = await prisma.channels.findMany({
-  where: {
-    OR: [
-      { is_private: false }, // public channels
-      {
+      where: {
+        OR: [
+          { is_private: false },
+          {
+            channel_members: {
+              some: { user_id: userId },
+            },
+          },
+        ],
+      },
+      include: {
         channel_members: {
-          some: { user_id: userId }, // private channels where user is member
+          include: {
+            users: true,
+          },
         },
       },
-    ],
-  },
-  include: {
-    channel_members: {
-      include: {
-        users: true,
+      orderBy: {
+        created_at: "desc",
       },
-    },
-  },
-  orderBy: {
-    created_at: "desc",
-  },
-});
-
+    });
 
     const results = [];
 
     for (const channel of channels) {
-      // 🔹 DM
       if (channel.is_dm) {
         const otherMember = channel.channel_members.find(
           (m) => m.user_id !== userId
@@ -88,7 +71,6 @@ router.get("/search-user-and-channel", async (req, res) => {
         continue;
       }
 
-      // 🔹 Normal channel
       if (channel.name?.toLowerCase().includes(query)) {
         results.push({
           id: channel.id,
@@ -104,6 +86,7 @@ router.get("/search-user-and-channel", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 router.get("/", async (req, res) => {
   try {
     const userId = req.user.id;
@@ -137,88 +120,43 @@ router.get("/", async (req, res) => {
   }
 });
 
-// router.get("/:channelId/messages", async (req, res) => {
-//   const channelId = Number(req.params.channelId);
-//   const limit = Number(req.query.limit) || 20;
-//   const cursor = req.query.cursor ? Number(req.query.cursor) : null;
-  
-//   const channel = await prisma.channels.findUnique({
-//   where: { id: channelId },
-//   include: { channel_members: true },
-// });
-
-// if (channel.is_private) {
-//   const memberIds = channel.channel_members.map((m) => m.user_id);
-//   if (!memberIds.includes(req.user.id)) {
-//     return res.status(403).json({ error: "Forbidden" });
-//   }
-// }
-
-//   try {
-
-//     const messages = await prisma.messages.findMany({
-//       where: {
-//         channel_id: channelId,
-//       },
-//       include: {
-//         users: {
-//           select: {
-//             name: true,
-//             avatar_url: true,
-//           },
-//         },
-//       },
-//       orderBy: {
-//         id: "desc", // newest first
-//       },
-//       take: limit,
-//       ...(cursor && {
-//         cursor: { id: cursor },
-//         skip: 1, // skip the cursor message itself
-//       }),
-//     });
-
-//     const formatted = messages
-//       .map(m => ({
-//         id: m.id,
-//         channel_id: m.channel_id,
-//         sender_id: m.sender_id,
-//         content: m.content,
-//         files: m.files,
-//         reactions: m.reactions,
-//         pinned: m.pinned,
-//         created_at: m.created_at,
-//         updated_at: m.updated_at,
-//         sender_name: m.users?.name ?? null,
-//         avatar_url: m.users?.avatar_url ?? null,
-//       }))
-//       .reverse(); // oldest → newest for UI
-
-//     res.json({
-//       messages: formatted,
-//       nextCursor: messages.length ? messages[messages.length - 1].id : null,
-//     });
-//   } catch (err) {
-//     console.error("Prisma messages error:", err);
-//     res.status(500).json({
-//       error: "DB Error",
-//       details: err.message,
-//     });
-//   }
-// });
-
 router.get("/:channelId/messages", async (req, res) => {
   const channelId = Number(req.params.channelId);
   const limit = Number(req.query.limit) || 20;
   const cursor = req.query.cursor ? Number(req.query.cursor) : null;
-
-  // ... your channel membership checks ...
+  const userId = req.user.id;
 
   try {
+    const channel = await prisma.channels.findUnique({
+      where: { id: channelId },
+      select: { is_private: true },
+    });
+
+    if (!channel) {
+      return res.status(404).json({ error: "Channel not found" });
+    }
+
+    if (channel.is_private) {
+      const isMember = await prisma.channel_members.findUnique({
+        where: {
+          channel_id_user_id: {
+            channel_id: channelId,
+            user_id: userId,
+          },
+        },
+      });
+
+      if (!isMember) {
+        return res
+          .status(403)
+          .json({ error: "You are not a member of this channel" });
+      }
+    }
+
     const messages = await prisma.messages.findMany({
       where: {
         channel_id: channelId,
-        ...(cursor && { id: { lt: cursor } }), // get older than cursor
+        ...(cursor && { id: { lt: cursor } }),
       },
       include: {
         users: {
@@ -229,26 +167,59 @@ router.get("/:channelId/messages", async (req, res) => {
         },
       },
       orderBy: {
-        id: "desc", // newest first
+        id: "desc",
       },
       take: limit,
     });
 
+    // Batch-fetch thread counts for all fetched messages in one query
+    const messageIds = messages.map((m) => m.id);
+    const threads = await prisma.threads.findMany({
+      where: { parent_message_id: { in: messageIds } },
+      select: {
+        parent_message_id: true,
+        _count: { select: { messages: true } },
+      },
+    });
+    const threadCountMap = new Map(
+      threads.map((t) => [t.parent_message_id, t._count.messages])
+    );
+
     const formatted = messages
-      .map((m) => ({
-        id: m.id,
-        channel_id: m.channel_id,
-        sender_id: m.sender_id,
-        content: m.content,
-        files: m.files,
-        reactions: m.reactions,
-        pinned: m.pinned,
-        created_at: m.created_at,
-        updated_at: m.updated_at,
-        sender_name: m.users?.name ?? null,
-        avatar_url: m.users?.avatar_url ?? null,
-      }))
-      .reverse(); // oldest → newest for UI
+      .map((m) => {
+        let forwardedFrom = null;
+        if (m.forwarded_from) {
+          try {
+            forwardedFrom = JSON.parse(m.forwarded_from);
+          } catch {
+            forwardedFrom = {
+              id: null,
+              name: m.forwarded_from,
+              channel_id: null,
+              channel_name: null,
+              channel_is_dm: false,
+            };
+          }
+        }
+        return {
+          id: m.id,
+          channel_id: m.channel_id,
+          sender_id: m.sender_id,
+          content: m.content,
+          files: m.files,
+          reactions: m.reactions,
+          pinned: m.pinned,
+          created_at: m.created_at,
+          updated_at: m.updated_at,
+          sender_name: m.users?.name ?? null,
+          avatar_url: m.users?.avatar_url ?? null,
+          is_forwarded: m.is_forwarded ?? false,
+          forwarded_from: forwardedFrom,
+          is_system: m.is_system ?? false,
+          thread_count: threadCountMap.get(m.id) ?? 0,
+        };
+      })
+      .reverse();
 
     const nextCursor =
       messages.length === limit ? messages[messages.length - 1].id : null;
@@ -270,7 +241,6 @@ router.get("/:channelId/members", async (req, res) => {
   try {
     const channelId = Number(req.params.channelId);
 
-    // 1️⃣ Get channel info
     const channel = await prisma.channels.findUnique({
       where: { id: channelId },
       select: {
@@ -284,7 +254,6 @@ router.get("/:channelId/members", async (req, res) => {
       return res.status(404).json({ error: "Channel not found" });
     }
 
-    // 2️⃣ Get members
     const members = await prisma.channel_members.findMany({
       where: { channel_id: channelId },
       include: {
@@ -299,101 +268,226 @@ router.get("/:channelId/members", async (req, res) => {
       },
     });
 
-    // 3️⃣ Return combined response
     res.json({
       channel,
       members: members.map((m) => m.users),
     });
-
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "DB Error" });
   }
 });
 
+// ─── Add a member to a private channel (creator only) ─────────────────────────
+router.post("/:channelId/members", async (req, res) => {
+  const channelId = Number(req.params.channelId);
+  const requesterId = req.user.id;
+  const { userId } = req.body;
 
-// router.post("/", async (req, res) => {
-//   try {
-//     const { name, isPrivate, memberIds = [] } = req.body;
+  if (!userId) return res.status(400).json({ error: "userId required" });
 
-//     // TEMP: hard-coded user (replace with req.user.id later)
-//     const userId = req.user.id;
+  try {
+    const channel = await prisma.channels.findUnique({
+      where: { id: channelId },
+      select: { is_private: true, created_by: true, name: true },
+    });
 
-//     if (!name || !name.trim()) {
-//       return res.status(400).json({ error: "Channel name required" });
-//     }
+    if (!channel)
+      return res.status(404).json({ error: "Channel not found" });
+    if (!channel.is_private)
+      return res.status(400).json({ error: "Channel is not private" });
+    if (String(channel.created_by) !== String(requesterId))
+      return res
+        .status(403)
+        .json({ error: "Only the channel creator can add members" });
 
-//     // ❌ Private channel must have members
-//     if (isPrivate && memberIds.length === 0) {
-//       return res.status(400).json({ error: "Private channel needs members" });
-//     }
+    await prisma.channel_members.upsert({
+      where: {
+        channel_id_user_id: {
+          channel_id: channelId,
+          user_id: Number(userId),
+        },
+      },
+      update: {},
+      create: { channel_id: channelId, user_id: Number(userId) },
+    });
 
-//     const result = await prisma.$transaction(async (tx) => {
-//       // 1️⃣ Create channel
-//       const channel = await tx.channels.create({
-//         data: {
-//           name: name.trim(),
-//           is_private: isPrivate ?? false,
-//           is_dm: false,
-//           created_by: userId,
-//         },
-//       });
+    const newMember = await prisma.users.findUnique({
+      where: { id: Number(userId) },
+      select: { id: true, name: true, email: true, avatar_url: true },
+    });
 
-//       // 🟢 PUBLIC CHANNEL → NO MEMBERS
-//       if (!isPrivate) {
-//         return {
-//           id: channel.id,
-//           name: channel.name,
-//           isPrivate: false,
-//         };
-//       }
+    const requester = await prisma.users.findUnique({
+      where: { id: requesterId },
+      select: { name: true },
+    });
 
-//       // res.json(memberIds);
+    // Create a system message for the channel
+    const systemMessage = await prisma.messages.create({
+      data: {
+        channel_id: channelId,
+        sender_id: requesterId,
+        content: `<em>${requester?.name ?? "Someone"} added ${newMember?.name ?? "a user"} to the channel</em>`,
+        is_system: true,
+      },
+    });
 
-//       // 🔒 PRIVATE CHANNEL → ADD MEMBERS
-//       const uniqueMemberIds = Array.from(new Set([userId, ...memberIds]));
+    const systemPayload = {
+      id: systemMessage.id,
+      channel_id: channelId,
+      sender_id: requesterId,
+      sender_name: requester?.name ?? null,
+      avatar_url: null,
+      content: systemMessage.content,
+      files: [],
+      reactions: [],
+      pinned: false,
+      created_at: systemMessage.created_at,
+      updated_at: systemMessage.updated_at,
+      is_forwarded: false,
+      forwarded_from: null,
+      is_system: true,
+    };
 
-//       await tx.channel_members.createMany({
-//         data: uniqueMemberIds.map((uid) => ({
-//           channel_id: channel.id,
-//           user_id: uid,
-//         })),
-//         skipDuplicates: true, // matches INSERT IGNORE behavior
-//       });
+    // Emit system message to channel
+    io.to(`channel_${channelId}`).emit("receiveMessage", systemPayload);
 
-//       return {
-//         id: channel.id,
-//         name: channel.name,
-//         isPrivate: true,
-//         members: uniqueMemberIds,
-//       };
-//     });
+    // Notify everyone in the channel — member list should refresh
+    io.to(`channel_${channelId}`).emit("memberAdded", {
+      channelId,
+      member: newMember,
+    });
 
-//     res.status(201).json(result);
-//     io.emit("channelCreated", {
-//       id: result.id,
-//       name: result.name,
-//       isPrivate: result.isPrivate,
-//     });
-//   } catch (err) {
-//     console.error("Create channel error:", err);
-//     res.status(500).json({
-//       error: "Channel creation failed",
-//       details: err.message,
-//     });
-//   }
-// });
+    // ─── Notify the added user: channel appears in their sidebar ────
+    // Build the full channel object so their sidebar can add it
+    const fullChannel = await prisma.channels.findUnique({
+      where: { id: channelId },
+    });
 
+    io.to(`user_${userId}`).emit("addedToChannel", {
+      channelId,
+      channelName: channel.name,
+      channel: fullChannel, // full channel data for sidebar
+      member: newMember,
+    });
 
+    res.json({ success: true, member: newMember });
+  } catch (err) {
+    console.error("Add member error:", err);
+    res.status(500).json({ error: "DB Error" });
+  }
+});
 
-// new
+// ─── Remove a member from a private channel (creator only) ────────────────────
+router.delete("/:channelId/members/:targetUserId", async (req, res) => {
+  const channelId = Number(req.params.channelId);
+  const targetUserId = Number(req.params.targetUserId);
+  const requesterId = req.user.id;
+
+  try {
+    const channel = await prisma.channels.findUnique({
+      where: { id: channelId },
+      select: { is_private: true, created_by: true, name: true },
+    });
+
+    if (!channel)
+      return res.status(404).json({ error: "Channel not found" });
+    if (!channel.is_private)
+      return res.status(400).json({ error: "Channel is not private" });
+    if (String(channel.created_by) !== String(requesterId))
+      return res
+        .status(403)
+        .json({ error: "Only the channel creator can remove members" });
+    if (String(targetUserId) === String(requesterId))
+      return res
+        .status(400)
+        .json({ error: "Use 'Leave Channel' to remove yourself" });
+
+    const targetUser = await prisma.users.findUnique({
+      where: { id: targetUserId },
+      select: { name: true },
+    });
+
+    const requester = await prisma.users.findUnique({
+      where: { id: requesterId },
+      select: { name: true },
+    });
+
+    await prisma.channel_members.delete({
+      where: {
+        channel_id_user_id: {
+          channel_id: channelId,
+          user_id: targetUserId,
+        },
+      },
+    });
+
+    // Create a system message for the channel
+    const systemMessage = await prisma.messages.create({
+      data: {
+        channel_id: channelId,
+        sender_id: requesterId,
+        content: `<em>${requester?.name ?? "Someone"} removed ${targetUser?.name ?? "a user"} from the channel</em>`,
+        is_system: true,
+      },
+    });
+
+    const systemPayload = {
+      id: systemMessage.id,
+      channel_id: channelId,
+      sender_id: requesterId,
+      sender_name: requester?.name ?? null,
+      avatar_url: null,
+      content: systemMessage.content,
+      files: [],
+      reactions: [],
+      pinned: false,
+      created_at: systemMessage.created_at,
+      updated_at: systemMessage.updated_at,
+      is_forwarded: false,
+      forwarded_from: null,
+      is_system: true,
+    };
+
+    // Emit system message to everyone still in the channel
+    io.to(`channel_${channelId}`).emit("receiveMessage", systemPayload);
+
+    // ─── Tell remaining members to update their member list ─────────
+    io.to(`channel_${channelId}`).emit("memberRemoved", {
+      channelId,
+      userId: targetUserId,
+      userName: targetUser?.name ?? null,
+    });
+
+    // ─── Tell the removed user: channel disappears from sidebar ─────
+    io.to(`user_${targetUserId}`).emit("removedFromChannel", {
+      channelId,
+      channelName: channel.name,
+    });
+
+    // Force the removed user out of the socket room
+    try {
+      const removedUserSockets = await io
+        .in(`user_${targetUserId}`)
+        .fetchSockets();
+      for (const s of removedUserSockets) {
+        s.leave(`channel_${channelId}`);
+      }
+    } catch (socketErr) {
+      console.error("Failed to remove user from socket room:", socketErr);
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Remove member error:", err);
+    res.status(500).json({ error: "DB Error" });
+  }
+});
+
 router.post("/", createOrCheckChannel);
-// new end
-
 
 router.post("/:channelId/join", async (req, res) => {
   const userId = req.user.id;
-
   const channelId = Number(req.params.channelId);
 
   try {
@@ -410,7 +504,6 @@ router.post("/:channelId/join", async (req, res) => {
       return res.status(403).json({ error: "Cannot join private channel" });
     }
 
-    // Equivalent to INSERT IGNORE
     await prisma.channel_members.upsert({
       where: {
         channel_id_user_id: {
@@ -434,7 +527,7 @@ router.post("/:channelId/join", async (req, res) => {
 
 router.get("/:id", async (req, res) => {
   const channelId = Number(req.params.id);
-  const userId = req.user.id; // get logged-in user from middleware
+  const userId = req.user.id;
 
   try {
     const channel = await prisma.channels.findUnique({
@@ -442,11 +535,33 @@ router.get("/:id", async (req, res) => {
     });
     if (!channel) return res.status(404).json({ error: "Not found" });
 
+    if (channel.is_private) {
+      const isMember = await prisma.channel_members.findUnique({
+        where: {
+          channel_id_user_id: {
+            channel_id: channelId,
+            user_id: userId,
+          },
+        },
+      });
+
+      if (!isMember) {
+        if (channel.is_dm) {
+          return res.status(403).json({ error: "Not a member" });
+        }
+        return res.json({
+          channel,
+          members: [],
+          is_member: false,
+        });
+      }
+    }
+
     if (channel.is_dm) {
       const dmUser = await prisma.channel_members.findFirst({
         where: {
           channel_id: channelId,
-          user_id: { not: userId }, // only gets the "other" user
+          user_id: { not: userId },
         },
         include: {
           users: { select: { id: true, name: true, avatar_url: true } },
@@ -456,16 +571,22 @@ router.get("/:id", async (req, res) => {
       return res.json({
         channel,
         dm_user: dmUser?.users ?? null,
+        is_member: true,
       });
     }
 
-    // Normal channel
     const members = await prisma.channel_members.findMany({
       where: { channel_id: channelId },
-      include: { users: { select: { id: true, name: true, email: true } } },
+      include: {
+        users: { select: { id: true, name: true, email: true } },
+      },
     });
 
-    res.json({ channel, members: members.map((m) => m.users) });
+    res.json({
+      channel,
+      members: members.map((m) => m.users),
+      is_member: true,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "DB Error" });
@@ -522,8 +643,6 @@ router.post("/:channelId/pin/:messageId", async (req, res) => {
       where: { id: messageId },
       data: {
         pinned: "1",
-        // pinned_by: userId,
-        // pinned_at: new Date(),
       },
     });
 
@@ -534,17 +653,12 @@ router.post("/:channelId/pin/:messageId", async (req, res) => {
   }
 });
 
-
-
-// files and pin api
 router.get("/:channelId/files", getChannelFiles);
 router.get("/:channelId/pinned", getChannelPinnedMessages);
-// files and pin api end
 
 router.delete("/:channelId/pin/:messageId", async (req, res) => {
   const channelId = Number(req.params.channelId);
   const messageId = Number(req.params.messageId);
-  // const userId = req.user.id;
   const userId = req.user.id;
 
   try {
@@ -561,7 +675,9 @@ router.delete("/:channelId/pin/:messageId", async (req, res) => {
     });
 
     if (!message || !message.pinned) {
-      return res.status(404).json({ error: "Message not pinned or not found" });
+      return res
+        .status(404)
+        .json({ error: "Message not pinned or not found" });
     }
 
     if (
@@ -621,10 +737,9 @@ router.post("/:channelId/leave", async (req, res) => {
       return res.status(400).json({ error: "Invalid channel id" });
     }
 
-    // Check channel exists
     const channel = await prisma.channels.findUnique({
       where: { id: channelId },
-      select: { id: true, is_private: true, is_dm: true },
+      select: { id: true, is_private: true, is_dm: true, name: true },
     });
 
     if (!channel) {
@@ -635,7 +750,6 @@ router.post("/:channelId/leave", async (req, res) => {
       return res.status(400).json({ error: "Cannot leave DM channel" });
     }
 
-    // Check membership
     const membership = await prisma.channel_members.findUnique({
       where: {
         channel_id_user_id: {
@@ -646,10 +760,16 @@ router.post("/:channelId/leave", async (req, res) => {
     });
 
     if (!membership) {
-      return res.status(400).json({ error: "You are not a member of this channel" });
+      return res
+        .status(400)
+        .json({ error: "You are not a member of this channel" });
     }
 
-    // Remove membership
+    const leavingUser = await prisma.users.findUnique({
+      where: { id: userId },
+      select: { name: true },
+    });
+
     await prisma.channel_members.delete({
       where: {
         channel_id_user_id: {
@@ -659,7 +779,42 @@ router.post("/:channelId/leave", async (req, res) => {
       },
     });
 
-    // OPTIONAL: if private channel and no members left → delete channel
+    // Create system message
+    const systemMessage = await prisma.messages.create({
+      data: {
+        channel_id: channelId,
+        sender_id: userId,
+        content: `<em>${leavingUser?.name ?? "A user"} left the channel</em>`,
+        is_system: true,
+      },
+    });
+
+    const systemPayload = {
+      id: systemMessage.id,
+      channel_id: channelId,
+      sender_id: userId,
+      sender_name: leavingUser?.name ?? null,
+      avatar_url: null,
+      content: systemMessage.content,
+      files: [],
+      reactions: [],
+      pinned: false,
+      created_at: systemMessage.created_at,
+      updated_at: systemMessage.updated_at,
+      is_forwarded: false,
+      forwarded_from: null,
+      is_system: true,
+    };
+
+    io.to(`channel_${channelId}`).emit("receiveMessage", systemPayload);
+
+    // Tell remaining members to update their member list
+    io.to(`channel_${channelId}`).emit("memberRemoved", {
+      channelId,
+      userId,
+      userName: leavingUser?.name ?? null,
+    });
+
     if (channel.is_private) {
       const remaining = await prisma.channel_members.count({
         where: { channel_id: channelId },
@@ -674,6 +829,17 @@ router.post("/:channelId/leave", async (req, res) => {
       channelId,
       userId,
     });
+
+    // Force user out of socket room
+    try {
+      const userSockets = await io.in(`user_${userId}`).fetchSockets();
+      for (const s of userSockets) {
+        s.leave(`channel_${channelId}`);
+      }
+    } catch (socketErr) {
+      console.error("Failed to remove user from socket room:", socketErr);
+    }
+
     return res.json({ success: true });
   } catch (err) {
     console.error("Leave channel error:", err);
@@ -699,7 +865,6 @@ router.get("/files/:fileId/download", async (req, res) => {
       return res.status(404).json({ error: "File not found" });
     }
 
-    // 🔐 check channel membership
     const isMember = await prisma.channel_members.findFirst({
       where: {
         channel_id: file.channel_id,
@@ -724,44 +889,123 @@ router.get("/files/:fileId/download", async (req, res) => {
   }
 });
 
-
 router.post(
-  "/messages/:messageId/forward/:channelId",
+  "/messages/:messageId/forward/:targetChannelId",
   async (req, res) => {
     const messageId = Number(req.params.messageId);
-    const channelId = Number(req.params.channelId);
+    const targetChannelId = Number(req.params.targetChannelId);
     const userId = req.user.id;
 
     try {
       const original = await prisma.messages.findUnique({
         where: { id: messageId },
         select: {
+          content: true,
           files: true,
+          channel_id: true,
+          sender_id: true,
+          is_forwarded: true,
+          forwarded_from: true,
+          users: { select: { name: true } },
         },
       });
 
-      if (!original || !original.files) {
-        return res.status(404).json({ error: "File not found" });
+      if (!original) {
+        return res.status(404).json({ error: "Message not found" });
       }
+
+      let forwardedFromObj;
+      if (original.is_forwarded && original.forwarded_from) {
+        try {
+          forwardedFromObj = JSON.parse(original.forwarded_from);
+        } catch {
+          forwardedFromObj = {
+            id: String(original.sender_id),
+            name: original.forwarded_from,
+            channel_id: original.channel_id,
+            channel_name: null,
+            channel_is_dm: false,
+          };
+        }
+      } else {
+        let channelName = null;
+        let isDm = false;
+
+        if (original.channel_id) {
+          const sourceChannel = await prisma.channels.findUnique({
+            where: { id: original.channel_id },
+            select: {
+              name: true,
+              is_dm: true,
+              channel_members: {
+                select: {
+                  users: { select: { name: true, id: true } },
+                },
+              },
+            },
+          });
+
+          isDm = sourceChannel?.is_dm ?? false;
+
+          if (isDm) {
+            const otherMember = sourceChannel?.channel_members?.find(
+              (m) => String(m.users?.id) !== String(original.sender_id)
+            );
+            channelName = otherMember?.users?.name ?? null;
+          } else {
+            channelName = sourceChannel?.name ?? null;
+          }
+        }
+
+        forwardedFromObj = {
+          id: String(original.sender_id),
+          name: original.users?.name ?? null,
+          channel_id: original.channel_id,
+          channel_name: channelName,
+          channel_is_dm: isDm,
+        };
+      }
+
+      const forwardedFromJson = JSON.stringify(forwardedFromObj);
 
       const newMessage = await prisma.messages.create({
         data: {
-          channel_id: channelId,
+          channel_id: targetChannelId,
           sender_id: userId,
-          content: null,
-          files: original.files,
+          content: original.content ?? null,
+          files: original.files ?? null,
+          is_forwarded: true,
+          forwarded_from: forwardedFromJson,
+        },
+        include: {
+          users: { select: { name: true, avatar_url: true } },
         },
       });
 
-      io.to(`channel_${channelId}`).emit("newMessage", newMessage);
+      const payload = {
+        id: newMessage.id,
+        channel_id: newMessage.channel_id,
+        sender_id: newMessage.sender_id,
+        sender_name: newMessage.users?.name ?? null,
+        avatar_url: newMessage.users?.avatar_url ?? null,
+        content: newMessage.content,
+        files: newMessage.files ? JSON.parse(newMessage.files) : [],
+        reactions: [],
+        pinned: false,
+        created_at: newMessage.created_at,
+        updated_at: newMessage.updated_at,
+        is_forwarded: true,
+        forwarded_from: forwardedFromObj,
+      };
 
-      res.json({ success: true, message: newMessage });
+      io.to(`channel_${targetChannelId}`).emit("receiveMessage", payload);
+
+      res.json({ success: true, message: payload });
     } catch (err) {
       console.error("Forward error:", err);
       res.status(500).json({ error: "Forward failed" });
     }
   }
 );
-
 
 export default router;
