@@ -185,6 +185,49 @@ router.get("/:channelId/messages", async (req, res) => {
       threads.map((t) => [t.parent_message_id, t._count.messages])
     );
 
+    // ── Parse & hydrate reactions ────────────────────────────────────────────
+    // The DB stores reactions as a JSON string with bare user IDs in the users
+    // array: [{ emoji, count, users: ["5", "12"] }].
+    // We need to hydrate those IDs into { id, name } objects — the same shape
+    // the socket path produces — so the tooltip always shows real names.
+    const allRawReactions = messages.map((m) => {
+      try { return JSON.parse(m.reactions || "[]"); } catch { return []; }
+    });
+
+    // Collect every unique user ID referenced in any reaction across all messages
+    const reactionUserIds = new Set();
+    for (const rxList of allRawReactions) {
+      for (const rx of rxList) {
+        for (const uid of (rx.users ?? [])) {
+          const n = Number(uid);
+          if (!isNaN(n)) reactionUserIds.add(n);
+        }
+      }
+    }
+
+    // Single batch lookup for all reaction users
+    const reactionUsers = reactionUserIds.size > 0
+      ? await prisma.users.findMany({
+          where: { id: { in: [...reactionUserIds] } },
+          select: { id: true, name: true },
+        })
+      : [];
+    const reactionUserMap = Object.fromEntries(reactionUsers.map((u) => [u.id, u.name]));
+
+    // Build hydrated reactions arrays indexed by message position
+    const hydratedReactionsById = new Map();
+    messages.forEach((m, i) => {
+      const hydrated = allRawReactions[i].map((rx) => ({
+        emoji: rx.emoji,
+        count: rx.count,
+        users: (rx.users ?? []).map((uid) => ({
+          id: Number(uid),
+          name: reactionUserMap[Number(uid)] ?? "Unknown",
+        })),
+      }));
+      hydratedReactionsById.set(m.id, hydrated);
+    });
+
     const formatted = messages
       .map((m) => {
         let forwardedFrom = null;
@@ -201,13 +244,17 @@ router.get("/:channelId/messages", async (req, res) => {
             };
           }
         }
+
+        let files = [];
+        try { files = JSON.parse(m.files || "[]"); } catch { files = []; }
+
         return {
           id: m.id,
           channel_id: m.channel_id,
           sender_id: m.sender_id,
           content: m.content,
-          files: m.files,
-          reactions: m.reactions,
+          files,
+          reactions: hydratedReactionsById.get(m.id) ?? [],
           pinned: m.pinned,
           created_at: m.created_at,
           updated_at: m.updated_at,

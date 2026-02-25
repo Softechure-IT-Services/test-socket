@@ -22,7 +22,7 @@ model channel_members {
 
 model channels {
   id              Int               @id @default(autoincrement())
-  name            String? @unique          @db.VarChar(255)
+  name            String?           @unique @db.VarChar(255)
   description     String?           @db.Text
   is_private      Boolean?          @default(false)
   is_dm           Boolean?          @default(false)
@@ -31,6 +31,7 @@ model channels {
   updated_at      DateTime?         @default(now()) @db.DateTime(0)
   channel_members channel_members[]
   users           users?            @relation(fields: [created_by], references: [id], onUpdate: Restrict, map: "channels_ibfk_1")
+  threads         threads[]
 
   @@index([created_by], map: "created_by")
 }
@@ -48,9 +49,9 @@ model messages {
   updated_at       DateTime? @default(now()) @db.DateTime(0)
   threads          threads?  @relation(fields: [thread_parent_id], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "fk_thread")
   users            users     @relation(fields: [sender_id], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "messages_ibfk_2")
-  is_forwarded   Boolean  @default(false)
-  forwarded_from String?
-  is_system Boolean @default(false)
+  is_forwarded     Boolean   @default(false)
+  forwarded_from   String?
+  is_system        Boolean   @default(false)
 
   @@index([thread_parent_id], map: "fk_thread")
   @@index([channel_id, created_at], map: "idx_messages_channel_time")
@@ -73,10 +74,13 @@ model refresh_tokens {
 }
 
 model threads {
-  id                Int        @id @default(autoincrement())
+  id                Int       @id @default(autoincrement())
   parent_message_id Int
-  created_at        DateTime?  @default(now()) @db.DateTime(0)
-  messages          messages[]
+  channel_id        Int
+  created_at        DateTime? @default(now()) @db.DateTime(0)
+
+  channels channels   @relation(fields: [channel_id], references: [id])
+  messages messages[]
 }
 
 model users {

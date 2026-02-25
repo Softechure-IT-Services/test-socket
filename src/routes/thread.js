@@ -4,9 +4,13 @@ import {
   getThreadReplies,
   getThreadCount,
   addThreadReply,
+  getAllThreads,
 } from "../controllers/thread.controller.js";
 
 const router = express.Router();
+
+// GET all THREADS
+router.get("/", verifyToken, getAllThreads);
 
 // GET all replies for a message (with sender user info)
 router.get("/:messageId", verifyToken, getThreadReplies);

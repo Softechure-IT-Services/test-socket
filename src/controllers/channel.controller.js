@@ -76,17 +76,19 @@ export const getChannelFiles = async (req, res) => {
     const limit = Math.min(100, Number(req.query.limit) || 20);
     const skip  = (page - 1) * limit;
 
-    // Fetch all messages with files for this channel (ordered newest first)
-    // We can't paginate at DB level easily because one message can have multiple
-    // files, so we fetch in batches of messages and flatten.
-    // A pragmatic approach: fetch limit*2 messages per page to account for
-    // multi-file messages, then trim to the correct slice of files.
-    //
-    // For large channels consider a dedicated file table; for now this is fine.
+    // Fetch thread IDs belonging to this channel so we can include thread replies
+    const channelThreads = await prisma.threads.findMany({
+      where: { channel_id: channelId },
+      select: { id: true },
+    });
+    const threadIds = channelThreads.map((t) => t.id);
 
     const messages = await prisma.messages.findMany({
       where: {
-        channel_id: channelId,
+        OR: [
+          { channel_id: channelId },
+          ...(threadIds.length > 0 ? [{ thread_parent_id: { in: threadIds } }] : []),
+        ],
         AND: [
           { files: { not: null } },
           { files: { not: "[]" } },
@@ -97,6 +99,7 @@ export const getChannelFiles = async (req, res) => {
         id: true,
         files: true,
         created_at: true,
+        thread_parent_id: true,
         users: {
           select: { id: true, name: true, avatar_url: true },
         },
@@ -117,6 +120,8 @@ export const getChannelFiles = async (req, res) => {
       return parsedFiles.map((file) => ({
         message_id: message.id,
         created_at: message.created_at,
+        is_thread_reply: message.thread_parent_id !== null,
+        thread_parent_id: message.thread_parent_id ?? null,
         sender: {
           id: message.users.id,
           name: message.users.name,
@@ -154,15 +159,27 @@ export const getChannelPinnedMessages = async (req, res) => {
       });
     }
 
+    // Fetch thread IDs belonging to this channel so we can include thread replies
+    const channelThreads = await prisma.threads.findMany({
+      where: { channel_id: channelId },
+      select: { id: true },
+    });
+    const threadIds = channelThreads.map((t) => t.id);
+
     const messages = await prisma.messages.findMany({
       where: {
-        channel_id: channelId,
-       pinned:true,
+        pinned: true,
+        OR: [
+          { channel_id: channelId },
+          ...(threadIds.length > 0 ? [{ thread_parent_id: { in: threadIds } }] : []),
+        ],
       },
       select: {
         id: true,
         content: true,
         pinned: true,
+        files: true,
+        thread_parent_id: true,
         created_at: true,
         updated_at: true,
         users: {
@@ -174,16 +191,22 @@ export const getChannelPinnedMessages = async (req, res) => {
         },
       },
       orderBy: {
-        updated_at: "desc", // most recently pinned first
+        updated_at: "desc",
       },
     });
 
     const pinnedMessages = messages.map(m => ({
       message_id: m.id,
       content: m.content,
-      pinned: m.pinned, // metadata if any
+      pinned: m.pinned,
       created_at: m.created_at,
       updated_at: m.updated_at,
+      is_thread_reply: m.thread_parent_id !== null,
+      thread_parent_id: m.thread_parent_id ?? null,
+      files: (() => {
+        try { return JSON.parse(m.files ?? "[]"); }
+        catch { return []; }
+      })(),
       sender: {
         id: m.users.id,
         name: m.users.name,
