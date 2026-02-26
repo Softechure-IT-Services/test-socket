@@ -34,15 +34,22 @@ export const createOrGetDM = async (req, res) => {
 //   select: { id: true },
 // });
 
-const existingDMs = await prisma.channels.findMany({
-  where: { is_dm: true },
-  include: { channel_members: true },
+// const existingDMs = await prisma.channels.findMany({
+//   where: { is_dm: true },
+//   include: { channel_members: true },
+// });
+const existingDM = await prisma.channels.findFirst({
+  where: {
+    is_dm: true,
+    name: `dm_${Math.min(userId, otherUserId)}_${Math.max(userId, otherUserId)}`,
+  },
+  select: { id: true },
 });
 
-const existingDM = existingDMs.find((c) => {
-  const memberIds = c.channel_members.map((m) => m.user_id).sort();
-  return memberIds.length === 2 && memberIds[0] === Math.min(userId, otherUserId) && memberIds[1] === Math.max(userId, otherUserId);
-});
+// const existingDM = existingDMs.find((c) => {
+//   const memberIds = c.channel_members.map((m) => m.user_id).sort();
+//   return memberIds.length === 2 && memberIds[0] === Math.min(userId, otherUserId) && memberIds[1] === Math.max(userId, otherUserId);
+// });
 
 
     if (existingDM) {
@@ -53,7 +60,7 @@ const existingDM = existingDMs.find((c) => {
     const dmChannel = await prisma.$transaction(async (tx) => {
       return tx.channels.create({
         data: {
-          name: "DM",
+          name: `dm_${Math.min(userId, otherUserId)}_${Math.max(userId, otherUserId)}`,
           is_private: true,
           is_dm: true,
           created_by: userId,
