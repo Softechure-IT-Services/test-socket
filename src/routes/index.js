@@ -6,3 +6,4 @@ export { default as authRouter } from "./auth.js";
 export { default as externalRouter } from "./external.js";
 export { default as uploadRoutes } from "./upload.js";
 export { default as dmRoutes } from "./dm.js";
+export { default as profileRoutes } from "./profile.js";

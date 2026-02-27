@@ -45,6 +45,7 @@ model messages {
   reactions        String?   @db.LongText
   pinned           Boolean   @default(false)
   thread_parent_id Int?
+  is_edited        Boolean   @default(false) 
   created_at       DateTime? @default(now()) @db.DateTime(0)
   updated_at       DateTime? @default(now()) @db.DateTime(0)
   threads          threads?  @relation(fields: [thread_parent_id], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "fk_thread")
@@ -98,4 +99,6 @@ model users {
   channels        channels[]
   messages        messages[]
   refresh_tokens  refresh_tokens[]
+  status  String?  @db.VarChar(255)
+  bio     String?  @db.Text
 }

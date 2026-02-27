@@ -4,7 +4,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import "dotenv/config";
 import cookieParser from "cookie-parser";
-import {channelRoutes, searchRouter, threadsRouter, usersRouter, authRouter, externalRouter, uploadRoutes, dmRoutes} from "./routes/index.js";
+import {channelRoutes, searchRouter, threadsRouter, usersRouter, authRouter, externalRouter, uploadRoutes, dmRoutes, profileRoutes} from "./routes/index.js";
 import { initSocket } from "./sockets/index.js";
 
 dotenv.config();
@@ -33,6 +33,7 @@ initSocket(server);
 app.get("/", (req, res) => res.send("Socket.IO Chat Backend Running"));
 app.use("/channels", channelRoutes);
 app.use("/search", searchRouter);
+app.use("/users", profileRoutes);
 app.use("/users", usersRouter);
 app.use("/threads", threadsRouter);
 app.use("/auth", authRouter);

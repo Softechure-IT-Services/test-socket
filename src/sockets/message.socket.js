@@ -57,6 +57,7 @@ export default function registerMessageSockets(io, socket) {
         avatar_url: socket.user.avatar_url,
         created_at: message.created_at,
         updated_at: message.updated_at,
+        is_edited: false,
       };
 
       // Broadcast to everyone in the channel room (the active viewer)
@@ -106,7 +107,7 @@ export default function registerMessageSockets(io, socket) {
 
       const updated = await prisma.messages.update({
         where: { id: msgId },
-        data: { content },
+        data: { content, is_edited: true },
       });
 
       io.to(`channel_${resolvedChannelId}`).emit("messageEdited", {
@@ -114,6 +115,7 @@ export default function registerMessageSockets(io, socket) {
         content,
         channel_id: resolvedChannelId,
         updated_at: updated.updated_at,
+        is_edited: true,
         is_thread_reply: isThreadReply,
         thread_parent_id: msg.thread_parent_id ?? null,
       });

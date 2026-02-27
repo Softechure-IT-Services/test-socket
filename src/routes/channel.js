@@ -262,6 +262,7 @@ router.get("/:channelId/messages", async (req, res) => {
           avatar_url: m.users?.avatar_url ?? null,
           is_forwarded: m.is_forwarded ?? false,
           forwarded_from: forwardedFrom,
+          is_edited: m.is_edited ?? false,
           is_system: m.is_system ?? false,
           thread_count: threadCountMap.get(m.id) ?? 0,
         };
@@ -540,7 +541,7 @@ router.post("/:channelId/join", async (req, res) => {
   try {
     const channel = await prisma.channels.findUnique({
       where: { id: channelId },
-      select: { is_private: true },
+      select: { id: true, name: true, is_private: true },
     });
 
     if (!channel) {
@@ -565,7 +566,57 @@ router.post("/:channelId/join", async (req, res) => {
       },
     });
 
-    res.json({ success: true });
+    // Notify the joining user so their sidebar shows the channel
+    const fullChannel = await prisma.channels.findUnique({
+      where: { id: channelId },
+    });
+
+    const joiningUser = await prisma.users.findUnique({
+      where: { id: userId },
+      select: { id: true, name: true, email: true, avatar_url: true },
+    });
+
+    io.to(`user_${userId}`).emit("addedToChannel", {
+      channelId,
+      channelName: channel.name,
+      channel: fullChannel,
+      member: joiningUser,
+    });
+
+    // Notify existing channel members that someone joined
+    const systemMessage = await prisma.messages.create({
+      data: {
+        channel_id: channelId,
+        sender_id: userId,
+        content: `<em>${joiningUser?.name ?? "A user"} joined the channel</em>`,
+        is_system: true,
+      },
+    });
+
+    const systemPayload = {
+      id: systemMessage.id,
+      channel_id: channelId,
+      sender_id: userId,
+      sender_name: joiningUser?.name ?? null,
+      avatar_url: null,
+      content: systemMessage.content,
+      files: [],
+      reactions: [],
+      pinned: false,
+      created_at: systemMessage.created_at,
+      updated_at: systemMessage.updated_at,
+      is_forwarded: false,
+      forwarded_from: null,
+      is_system: true,
+    };
+
+    io.to(`channel_${channelId}`).emit("receiveMessage", systemPayload);
+    io.to(`channel_${channelId}`).emit("memberAdded", {
+      channelId,
+      member: joiningUser,
+    });
+
+    res.json({ success: true, channel: fullChannel });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Join failed" });
@@ -629,10 +680,13 @@ router.get("/:id", async (req, res) => {
       },
     });
 
+    // Check if this specific user is a member (they may have left a public channel)
+    const userIsMember = members.some((m) => m.users && String(m.users.id) === String(userId));
+
     res.json({
       channel,
       members: members.map((m) => m.users),
-      is_member: true,
+      is_member: userIsMember,
     });
   } catch (err) {
     console.error(err);
@@ -806,10 +860,19 @@ router.post("/:channelId/leave", async (req, res) => {
       },
     });
 
+    // For public channels: if no membership row exists yet, the user
+    // is effectively a "viewer" and has nothing to leave — inform them.
+    // For private channels: membership row is required to be in the channel.
     if (!membership) {
+      if (channel.is_private) {
+        return res
+          .status(400)
+          .json({ error: "You are not a member of this channel" });
+      }
+      // Public channel but no row — nothing to remove
       return res
         .status(400)
-        .json({ error: "You are not a member of this channel" });
+        .json({ error: "You have not joined this channel" });
     }
 
     const leavingUser = await prisma.users.findUnique({

@@ -300,8 +300,15 @@ export const createOrCheckChannel = async (req, res) => {
         },
       });
 
-      // 🟢 Public channel
+      // 🟢 Public channel — still add creator to channel_members so they can leave
       if (!isPrivate) {
+        await tx.channel_members.create({
+          data: {
+            channel_id: channel.id,
+            user_id: userId,
+          },
+        });
+
         return {
           id: channel.id,
           name: channel.name,
