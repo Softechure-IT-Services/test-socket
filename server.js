@@ -35,12 +35,14 @@ const allowedOrigins = [
   "http://192.168.1.14:3000",
   "http://192.168.1.15:3000",
   "http://192.168.0.113:5000",
+  "http://192.168.0.113:5000",
+  "http://192.168.31.147:3000",
   "https://test-socket-client-steel.vercel.app/",
   process.env.CLIENT_URL,
 ].filter(Boolean);
 app.use(
   cors({
-    origin: allowedOrigins,
+    origin: "*",
     credentials: true,
   })
 );
