@@ -4,7 +4,7 @@ import cookie from "cookie";
 import socketAuthMiddleware from "./auth.middleware.js";
 import registerChannelSockets from "./channel.socket.js";
 import registerMessageSockets from "./message.socket.js";
-import registerConnectionHuddleSockets from "./huddle.socket.js";
+import registerConnectionHuddleSockets from "./huddleSocket.js";
 export let io;
 export function initSocket(server) {
   io = new Server(server, {

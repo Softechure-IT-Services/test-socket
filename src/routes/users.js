@@ -23,11 +23,10 @@ router.get("/", verifyToken, async (req, res) => {
   }
 });
 
-// Search users
 router.get("/search", verifyToken, async (req, res) => {
   try {
     const { q = "", exclude } = req.query;
-    if (!q.trim()) return res.json([]);
+    // ← removed the early return on empty q
     const users = await searchUsers(q, exclude);
     res.json(users);
   } catch (err) {
@@ -35,7 +34,6 @@ router.get("/search", verifyToken, async (req, res) => {
     res.status(500).json({ error: "DB Error" });
   }
 });
-
 // Get single user
 // Guard: reject non-numeric segments so GET /users/me is never caught here
 // (the /me route lives in profile.js and must be mounted before this router)

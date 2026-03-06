@@ -94,7 +94,10 @@ const other = await prisma.users.findUnique({
 [creator.id, other.id].forEach((uid) => {
   io.to(`user_${uid}`).emit("dmCreated", {
     channel_id: dmChannel.id,
-    members: [creator, other],
+    members: [
+      { id: creator.id, name: creator.name, avatar_url: creator.avatar_url },
+      { id: other.id,    name: other.name,   avatar_url: other.avatar_url },
+    ],
   });
 });
 

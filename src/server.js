@@ -4,7 +4,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import "dotenv/config";
 import cookieParser from "cookie-parser";
-import {channelRoutes, searchRouter, threadsRouter, usersRouter, authRouter, externalRouter, uploadRoutes, dmRoutes, profileRoutes} from "./routes/index.js";
+import {channelRoutes, searchRouter, threadsRouter, usersRouter, authRouter, externalRouter, uploadRoutes, dmRoutes, profileRoutes, huddleRoutes} from "./routes/index.js";
 import { initSocket } from "./sockets/index.js";
 
 dotenv.config();
@@ -40,6 +40,7 @@ app.use("/auth", authRouter);
 app.use("/external", externalRouter);
 app.use("/upload", uploadRoutes);
 app.use("/dm", dmRoutes);
+app.use("/huddle", huddleRoutes);
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log("Server running on port", PORT));

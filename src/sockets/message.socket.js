@@ -4,34 +4,63 @@ import supabase from "../utils/supabase.js";
 export default function registerMessageSockets(io, socket) {
 
   // ================= SEND =================
-  socket.on("sendMessage", async ({ content, channel_id, files }) => {
-    try {
-      const userId = socket.user.id;
+//   socket.on("sendMessage", async ({ content, channel_id, files }) => {
+//     try {
+//       const userId = socket.user.id;
 
-      // Check if the channel is private and user is still a member
-      const channel = await prisma.channels.findUnique({
-        where: { id: channel_id },
-        select: { is_private: true, is_dm: true, name: true },
-      });
+//       // Check if the channel is private and user is still a member
+//       const channel = await prisma.channels.findUnique({
+//         where: { id: channel_id },
+//         select: { is_private: true, is_dm: true, name: true },
+//       });
 
-      if (channel?.is_private) {
-        const isMember = await prisma.channel_members.findUnique({
-          where: {
-            channel_id_user_id: {
-              channel_id: channel_id,
-              user_id: userId,
-            },
-          },
+// const isMember = await prisma.channel_members.findUnique({
+//   where: {
+//     channel_id_user_id: {
+//       channel_id: channel_id,
+//       user_id: userId,
+//     },
+//   },
+// });
+
+// if (!isMember) {
+//   socket.emit("messageSendError", {
+//     channel_id: channel_id,
+//     error: "You are no longer a member of this channel",
+//   });
+//   return;
+// }
+
+socket.on("sendMessage", async ({ content, channel_id, files }) => {
+  try {
+    const userId = socket.user.id;
+
+    const channel = await prisma.channels.findUnique({
+      where: { id: channel_id },
+      select: { is_private: true, is_dm: true, name: true },
+    });
+
+    // Membership check (your existing fix for leaving)
+    const isMember = await prisma.channel_members.findUnique({
+      where: { channel_id_user_id: { channel_id: channel_id, user_id: userId } },
+    });
+
+    if (!isMember) {
+      // For public channels: auto-join instead of blocking
+      if (!channel?.is_private && !channel?.is_dm) {
+        await prisma.channel_members.create({
+          data: { channel_id: channel_id, user_id: userId },
         });
-
-        if (!isMember) {
-          socket.emit("messageSendError", {
-            channel_id: channel_id,
-            error: "You are no longer a member of this channel",
-          });
-          return;
-        }
+      } else {
+        socket.emit("messageSendError", {
+          channel_id,
+          error: "You are no longer a member of this channel",
+        });
+        return;
       }
+    }
+
+    // ... rest unchanged
 
       if (!channel_id || (!content && (!files || !files.length))) return;
 
