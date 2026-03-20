@@ -21,6 +21,7 @@ import bcrypt from "bcryptjs";
 import prisma from "../config/prisma.js";
 import verifyToken from "../middleware/auth.js";
 import supabase from "../utils/supabase.js";
+import { io } from "../sockets/index.js";
 
 const router = express.Router();
 
@@ -111,9 +112,8 @@ router.get("/me", async (req, res) => {
         // and run `prisma migrate dev` if they don't exist yet:
         //   status  String?  @db.VarChar(255)
         //   bio     String?  @db.Text
-        ...(true && {}), // placeholder — remove and uncomment below once migrated
-        // status: true,
-        // bio: true,
+        status: true,
+        bio: true,
       },
     });
 
@@ -159,6 +159,10 @@ router.patch("/me", async (req, res) => {
         avatar_url: true,
       },
     });
+
+    if (io) {
+      io.emit("userUpdated", updated);
+    }
 
     res.json({ success: true, user: updated });
   } catch (err) {
@@ -214,6 +218,10 @@ router.post("/avatar", upload.single("avatar"), async (req, res) => {
       data: { avatar_url: avatarUrl },
     });
 
+    if (io) {
+      io.emit("userUpdated", { id: req.userId, avatar_url: avatarUrl });
+    }
+
     // Clean up the old avatar (non-fatal if it fails)
     if (currentUser?.avatar_url) {
       await deleteOldAvatar(currentUser.avatar_url);
@@ -248,6 +256,10 @@ router.delete("/avatar", async (req, res) => {
       where: { id: req.userId },
       data: { avatar_url: null },
     });
+
+    if (io) {
+      io.emit("userUpdated", { id: req.userId, avatar_url: null });
+    }
 
     res.json({ success: true });
   } catch (err) {

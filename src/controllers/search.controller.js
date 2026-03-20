@@ -8,9 +8,6 @@ import prisma from "../config/prisma.js";
  *   #<term>       → channels matching name, + messages within that channel
  *   @<term>       → people matching name
  *   <term>        → channels + people + messages (global)
- *
- * When MainHeader fires focusNavSearch with prefill "#general ", the query
- * arrives as "#general " — we trim the term so "general " → "general".
  */
 export const searchAll = async (req, res) => {
   const userId = req.user?.id;
@@ -23,20 +20,89 @@ export const searchAll = async (req, res) => {
   // ── Parse prefix ──────────────────────────────────────────────────────────
   let mode = "all";
   let term = rawQ.trim();
-
-  if (term.startsWith("#")) {
-    mode = "channel";
-    term = term.slice(1).trim(); // ← .trim() removes trailing space from prefill
-  } else if (term.startsWith("@")) {
-    mode = "people";
-    term = term.slice(1).trim(); // ← same fix here
-  }
-
-  // term may now be empty (e.g. user just typed "#" or "@") — that's fine,
-  // we show all channels / all people in that case.
-  const q = term;
+  let messageQuery = "";
 
   try {
+    if (term.startsWith("#")) {
+      mode = "channel";
+      const withoutHash = term.slice(1);
+      
+      const visibleChannels = await prisma.channels.findMany({
+        where: {
+          is_dm: false,
+          OR: [
+            { is_private: false },
+            { channel_members: { some: { user_id: userId } } },
+          ],
+        },
+        select: { id: true, name: true, is_private: true },
+      });
+
+      let matchedChannel = null;
+      let longestMatchLen = 0;
+      for (const c of visibleChannels) {
+        const cName = c.name.toLowerCase();
+        if (withoutHash.toLowerCase().startsWith(cName)) {
+           if (withoutHash.length === cName.length || withoutHash[cName.length] === ' ') {
+             if (cName.length > longestMatchLen) {
+               longestMatchLen = cName.length;
+               matchedChannel = c;
+             }
+           }
+        }
+      }
+
+      if (matchedChannel) {
+        term = matchedChannel.name;
+        messageQuery = withoutHash.slice(longestMatchLen).trim();
+      } else {
+        const spaceIdx = withoutHash.indexOf(" ");
+        if (spaceIdx !== -1) {
+          term = withoutHash.slice(0, spaceIdx);
+          messageQuery = withoutHash.slice(spaceIdx + 1).trim();
+        } else {
+          term = withoutHash;
+        }
+      }
+    } else if (term.startsWith("@")) {
+      mode = "people";
+      const withoutAt = term.slice(1);
+      
+      const users = await prisma.users.findMany({
+         where: { id: { not: userId } },
+         select: { id: true, name: true, email: true, avatar_url: true }
+      });
+
+      let matchedUser = null;
+      let longestMatchLen = 0;
+      for (const u of users) {
+        const uName = u.name.toLowerCase();
+        if (withoutAt.toLowerCase().startsWith(uName)) {
+           if (withoutAt.length === uName.length || withoutAt[uName.length] === ' ') {
+             if (uName.length > longestMatchLen) {
+               longestMatchLen = uName.length;
+               matchedUser = u;
+             }
+           }
+        }
+      }
+
+      if (matchedUser) {
+        term = matchedUser.name;
+        messageQuery = withoutAt.slice(longestMatchLen).trim();
+      } else {
+        const spaceIdx = withoutAt.indexOf(" ");
+        if (spaceIdx !== -1) {
+          term = withoutAt.slice(0, spaceIdx);
+          messageQuery = withoutAt.slice(spaceIdx + 1).trim();
+        } else {
+          term = withoutAt;
+        }
+      }
+    }
+
+    const q = term;
+
     // ── 1. Channels ───────────────────────────────────────────────────────────
     const channels =
       mode === "people"
@@ -44,7 +110,6 @@ export const searchAll = async (req, res) => {
         : await prisma.channels.findMany({
             where: {
               is_dm: false,
-              // Only filter by name if there's an actual term
               ...(q ? { name: { contains: q } } : {}),
               OR: [
                 { is_private: false },
@@ -67,7 +132,6 @@ export const searchAll = async (req, res) => {
         : await prisma.users.findMany({
             where: {
               id: { not: userId },
-              // Only filter by name/email if there's an actual term
               ...(q
                 ? {
                     OR: [
@@ -107,27 +171,27 @@ export const searchAll = async (req, res) => {
     );
 
     // ── 3. Messages ───────────────────────────────────────────────────────────
-    // Runs for:
-    //   mode === "all"     → search everywhere (requires a term)
-    //   mode === "channel" → search messages inside matched channels (even empty term
-    //                        shows recent messages in that channel)
     let messages = [];
 
-    const shouldSearchMessages = mode === "all" || mode === "channel";
+    const shouldSearchMessages = mode === "all" || mode === "channel" || mode === "people";
 
     if (shouldSearchMessages) {
-      // Determine which channel IDs to scope message search to
       let scopedChannelIds = [];
       let channelMap = {};
 
       if (mode === "channel" && channels.length > 0) {
-        // Scope to the channels found by the # search
         scopedChannelIds = channels.map((c) => c.id);
         channelMap = Object.fromEntries(
           channels.map((c) => [c.id, { name: c.name, is_dm: false }])
         );
+      } else if (mode === "people" && people.length > 0) {
+        scopedChannelIds = people.map((p) => p.dm_channel_id).filter(id => id !== null);
+        for (const p of people) {
+          if (p.dm_channel_id) {
+            channelMap[p.dm_channel_id] = { name: p.name, is_dm: true };
+          }
+        }
       } else if (mode === "all") {
-        // All channels visible to the user
         const visibleChannels = await prisma.channels.findMany({
           where: {
             OR: [
@@ -143,13 +207,23 @@ export const searchAll = async (req, res) => {
         );
       }
 
+      const effectiveQuery = mode === "all" ? q : messageQuery;
+
       if (scopedChannelIds.length > 0) {
+        const threadsInChannels = await prisma.threads.findMany({
+          where: { channel_id: { in: scopedChannelIds } },
+          select: { id: true, channel_id: true }
+        });
+        const threadIds = threadsInChannels.map(t => t.id);
+
         const rawMessages = await prisma.messages.findMany({
           where: {
-            channel_id: { in: scopedChannelIds },
-            // content must not be null, and optionally must contain the search term
-            content: q
-              ? { contains: q, not: null }
+            OR: [
+              { channel_id: { in: scopedChannelIds } },
+              ...(threadIds.length > 0 ? [{ thread_parent_id: { in: threadIds } }] : [])
+            ],
+            content: effectiveQuery
+              ? { contains: effectiveQuery, not: null }
               : { not: null },
           },
           select: {
@@ -157,6 +231,7 @@ export const searchAll = async (req, res) => {
             content: true,
             created_at: true,
             channel_id: true,
+            thread_parent_id: true,
             users: {
               select: { id: true, name: true, avatar_url: true },
             },
@@ -165,17 +240,25 @@ export const searchAll = async (req, res) => {
           take: 8,
         });
 
-        messages = rawMessages.map((m) => ({
-          id: m.id,
-          content: m.content,
-          created_at: m.created_at,
-          channel_id: m.channel_id,
-          channel_name: m.channel_id ? (channelMap[m.channel_id]?.name ?? null) : null,
-          is_dm_channel: m.channel_id ? (channelMap[m.channel_id]?.is_dm ?? false) : false,
-          sender_name: m.users?.name ?? null,
-          sender_avatar: m.users?.avatar_url ?? null,
-          kind: "message",
-        }));
+        const threadToChannelMap = Object.fromEntries(
+          threadsInChannels.map(t => [t.id, t.channel_id])
+        );
+
+        messages = rawMessages.map((m) => {
+          const mChannelId = m.channel_id || threadToChannelMap[m.thread_parent_id];
+          return {
+            id: m.id,
+            content: m.content,
+            created_at: m.created_at,
+            channel_id: mChannelId,
+            thread_parent_id: m.thread_parent_id ?? null,
+            channel_name: mChannelId ? (channelMap[mChannelId]?.name ?? null) : null,
+            is_dm_channel: mChannelId ? (channelMap[mChannelId]?.is_dm ?? false) : false,
+            sender_name: m.users?.name ?? null,
+            sender_avatar: m.users?.avatar_url ?? null,
+            kind: "message",
+          };
+        });
       }
     }
 

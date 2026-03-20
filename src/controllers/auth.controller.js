@@ -19,7 +19,11 @@ export const registerUser = async ({ external_id, name, email, avatar_url, passw
   const existing = await prisma.users.findUnique({ where: { email } });
   if (existing) throw { status: 409, message: "Email already registered" };
 
-  const hashedPassword = await bcrypt.hash(password, 10);
+  // Normalize password so whitespace-only values are rejected
+  if (!password || !password.trim()) throw { status: 400, message: "Password is required" };
+  const cleanPassword = password.trim();
+
+  const hashedPassword = await bcrypt.hash(cleanPassword, 10);
 
   const user = await prisma.users.create({
     data: {
@@ -52,7 +56,10 @@ export const loginUser = async ({ email, password }) => {
   const user = await prisma.users.findUnique({ where: { email } });
   if (!user) throw { status: 404, message: "User not found" };
 
-  const valid = await bcrypt.compare(password, user.password || "");
+  if (!password || !password.trim()) throw { status: 400, message: "Password is required" };
+  const cleanPassword = password.trim();
+
+  const valid = await bcrypt.compare(cleanPassword, user.password || "");
   if (!valid) throw { status: 401, message: "Invalid password" };
 
   // Generate tokens
@@ -123,4 +130,75 @@ export const logoutUser = async (token) => {
     where: { token_hash: tokenHash },
     data: { revoked: true },
   });
+};
+
+/**
+ * Request a password reset (sends a token via email in a real system)
+ */
+export const requestPasswordReset = async ({ email }) => {
+  if (!email || !email.trim()) throw { status: 400, message: "Email is required" };
+
+  const user = await prisma.users.findUnique({ where: { email } });
+
+  // Don't leak whether the email exists
+  if (!user) {
+    return { message: "If that email is registered, a reset link has been sent." };
+  }
+
+  const resetToken = crypto.randomBytes(32).toString("hex");
+  const tokenHash = hashToken(resetToken);
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1h
+
+  await prisma.password_reset_tokens.create({
+    data: {
+      user_id: user.id,
+      token_hash: tokenHash,
+      expires_at: expiresAt,
+      used: false,
+    },
+  });
+
+  // TODO: send resetToken via email to the user. For now we return it so you can use it in dev/testing.
+  return {
+    message: "If that email is registered, a reset link has been sent.",
+    resetToken,
+  };
+};
+
+/**
+ * Reset password using a reset token
+ */
+export const resetPassword = async ({ token, password }) => {
+  if (!token) throw { status: 400, message: "Reset token is required" };
+  if (!password || !password.trim()) throw { status: 400, message: "Password is required" };
+
+  const tokenHash = hashToken(token);
+  const record = await prisma.password_reset_tokens.findFirst({
+    where: {
+      token_hash: tokenHash,
+      used: false,
+      expires_at: { gte: new Date() },
+    },
+  });
+
+  if (!record) throw { status: 400, message: "Invalid or expired reset token" };
+
+  const user = await prisma.users.findUnique({ where: { id: record.user_id } });
+  if (!user) throw { status: 404, message: "User not found" };
+
+  const cleanPassword = password.trim();
+  const hashedPassword = await bcrypt.hash(cleanPassword, 10);
+
+  await prisma.$transaction([
+    prisma.users.update({
+      where: { id: user.id },
+      data: { password: hashedPassword },
+    }),
+    prisma.password_reset_tokens.update({
+      where: { id: record.id },
+      data: { used: true },
+    }),
+  ]);
+
+  return { message: "Password reset successful" };
 };

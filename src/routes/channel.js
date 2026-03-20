@@ -183,7 +183,12 @@ router.get("/", async (req, res) => {
           getDms ? {} : { is_dm: false },
           {
             OR: [
-              { is_private: false },
+              // Public channel the user has NOT explicitly left
+              {
+                is_private: false,
+                channel_left: { none: { user_id: userId } },
+              },
+              // Private channel (or public one) where the user is a member
               {
                 channel_members: {
                   some: { user_id: userId },
@@ -225,18 +230,14 @@ router.get("/:channelId/messages", async (req, res) => {
       if (!isMember) return res.status(403).json({ error: "You are not a member of this channel" });
     }
 
-    // ✅ Auto-join public channels on first view so notifications work
-    if (!channel.is_private && !channel.is_dm) {
-      await prisma.channel_members.upsert({
-        where: { channel_id_user_id: { channel_id: channelId, user_id: userId } },
-        create: { channel_id: channelId, user_id: userId },
-        update: {}, // already a member, no-op
-      });
-    }
+    // NOTE: We intentionally do NOT auto-join public channels here.
+    // Auto-joining on message fetch would silently undo a deliberate leave action.
+    // Membership is only created when the user explicitly clicks "Join Channel"
+    // via POST /:channelId/join.
   // const channelId = Number(req.params.channelId);
   const limit = Number(req.query.limit) || 20;
   const cursor = req.query.cursor ? Number(req.query.cursor) : null;
-  // const userId = req.user.id;
+  const after  = req.query.after  ? Number(req.query.after)  : null;
 
   // try {
   //   const channel = await prisma.channels.findUnique({
@@ -269,6 +270,7 @@ router.get("/:channelId/messages", async (req, res) => {
       where: {
         channel_id: channelId,
         ...(cursor && { id: { lt: cursor } }),
+        ...(after  && { id: { gt: after  } }),
       },
       include: {
         users: {
@@ -279,7 +281,7 @@ router.get("/:channelId/messages", async (req, res) => {
         },
       },
       orderBy: {
-        id: "desc",
+        id: after ? "asc" : "desc",
       },
       take: limit,
     });
@@ -378,11 +380,13 @@ router.get("/:channelId/messages", async (req, res) => {
           is_system: m.is_system ?? false,
           thread_count: threadCountMap.get(m.id) ?? 0,
         };
-      })
-      .reverse();
+      });
+
+    // Desc-order results need reversing to chronological; asc (after-query) are already correct
+    if (!after) formatted.reverse();
 
     const nextCursor =
-      messages.length === limit ? messages[messages.length - 1].id : null;
+      !after && messages.length === limit ? messages[messages.length - 1].id : null;
 
     res.json({
       messages: formatted,
@@ -678,6 +682,11 @@ router.post("/:channelId/join", async (req, res) => {
       },
     });
 
+    // Clear any 'left' record so the user is treated as a participant again
+    await prisma.channel_left.deleteMany({
+      where: { channel_id: channelId, user_id: userId },
+    });
+
     // Notify the joining user so their sidebar shows the channel
     const fullChannel = await prisma.channels.findUnique({
       where: { id: channelId },
@@ -765,8 +774,19 @@ router.get("/:id", async (req, res) => {
       },
     });
 
-    // Check if this specific user is a member (they may have left a public channel)
-    const userIsMember = members.some((m) => m.users && String(m.users.id) === String(userId));
+
+    // For public channels: a user is a member UNLESS they have explicitly left.
+    // We track deliberate leaves in channel_left so we can distinguish
+    // 'never joined' (allowed) from 'left on purpose' (blocked).
+    let userIsMember;
+    if (channel.is_private) {
+      userIsMember = members.some((m) => m.users && String(m.users.id) === String(userId));
+    } else {
+      const hasLeft = await prisma.channel_left.findUnique({
+        where: { channel_id_user_id: { channel_id: channelId, user_id: userId } },
+      });
+      userIsMember = !hasLeft;
+    }
 
     res.json({
       channel,
@@ -945,19 +965,20 @@ router.post("/:channelId/leave", async (req, res) => {
       },
     });
 
-    // For public channels: if no membership row exists yet, the user
-    // is effectively a "viewer" and has nothing to leave — inform them.
-    // For private channels: membership row is required to be in the channel.
-    if (!membership) {
-      if (channel.is_private) {
-        return res
-          .status(400)
-          .json({ error: "You are not a member of this channel" });
-      }
-      // Public channel but no row — nothing to remove
-      return res
-        .status(400)
-        .json({ error: "You have not joined this channel" });
+    // For private channels: must have a membership row to leave.
+    if (!membership && channel.is_private) {
+      return res.status(400).json({ error: "You are not a member of this channel" });
+    }
+
+    // For public channels: record the deliberate leave in channel_left
+    // regardless of whether a channel_members row exists.
+    // This is how we distinguish 'left on purpose' from 'never joined'.
+    if (!channel.is_private) {
+      await prisma.channel_left.upsert({
+        where: { channel_id_user_id: { channel_id: channelId, user_id: userId } },
+        update: { left_at: new Date() },
+        create: { channel_id: channelId, user_id: userId },
+      });
     }
 
     const leavingUser = await prisma.users.findUnique({
@@ -965,14 +986,17 @@ router.post("/:channelId/leave", async (req, res) => {
       select: { name: true },
     });
 
-    await prisma.channel_members.delete({
-      where: {
-        channel_id_user_id: {
-          channel_id: channelId,
-          user_id: userId,
+    // Only delete the channel_members row if one exists
+    if (membership) {
+      await prisma.channel_members.delete({
+        where: {
+          channel_id_user_id: {
+            channel_id: channelId,
+            user_id: userId,
+          },
         },
-      },
-    });
+      });
+    }
 
     // Create system message
     const systemMessage = await prisma.messages.create({
@@ -1060,15 +1084,20 @@ router.get("/files/:fileId/download", async (req, res) => {
       return res.status(404).json({ error: "File not found" });
     }
 
-    const isMember = await prisma.channel_members.findFirst({
-      where: {
-        channel_id: file.channel_id,
-        user_id: userId,
-      },
+    const fileChannel = await prisma.channels.findUnique({
+      where: { id: file.channel_id },
+      select: { is_private: true },
     });
 
-    if (!isMember) {
-      return res.status(403).json({ error: "Forbidden" });
+    // Public channels: any authenticated user may download files.
+    // Private channels: enforce membership.
+    if (fileChannel?.is_private) {
+      const isMember = await prisma.channel_members.findFirst({
+        where: { channel_id: file.channel_id, user_id: userId },
+      });
+      if (!isMember) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
     }
 
     const filePath = path.resolve("uploads", file.path);

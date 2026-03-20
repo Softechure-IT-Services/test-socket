@@ -31,7 +31,9 @@ export default function registerMessageSockets(io, socket) {
 //   return;
 // }
 
-socket.on("sendMessage", async ({ content, channel_id, files }) => {
+// socket.on("sendMessage", async ({ content, channel_id, files }) => {
+
+  socket.on("sendMessage", async ({ content, channel_id, files }) => {
   try {
     const userId = socket.user.id;
 
@@ -40,24 +42,31 @@ socket.on("sendMessage", async ({ content, channel_id, files }) => {
       select: { is_private: true, is_dm: true, name: true },
     });
 
-    // Membership check (your existing fix for leaving)
-    const isMember = await prisma.channel_members.findUnique({
-      where: { channel_id_user_id: { channel_id: channel_id, user_id: userId } },
-    });
+    if (!channel) return;
 
-    if (!isMember) {
-      // For public channels: auto-join instead of blocking
-      if (!channel?.is_private && !channel?.is_dm) {
-        await prisma.channel_members.create({
-          data: { channel_id: channel_id, user_id: userId },
-        });
-      } else {
-        socket.emit("messageSendError", {
-          channel_id,
-          error: "You are no longer a member of this channel",
-        });
-        return;
-      }
+    // ── Membership check — mirrors the same logic as GET /:id ──────────────
+    // Public channels: a user is a member unless they've explicitly left.
+    // Private / DM channels: must have an explicit channel_members row.
+    let canSend = false;
+
+    if (channel.is_private || channel.is_dm) {
+      const membership = await prisma.channel_members.findUnique({
+        where: { channel_id_user_id: { channel_id: channel_id, user_id: userId } },
+      });
+      canSend = !!membership;
+    } else {
+      const hasLeft = await prisma.channel_left.findUnique({
+        where: { channel_id_user_id: { channel_id: channel_id, user_id: userId } },
+      });
+      canSend = !hasLeft;
+    }
+
+    if (!canSend) {
+      socket.emit("messageSendError", {
+        channel_id,
+        error: "You are no longer a member of this channel",
+      });
+      return;
     }
 
     // ... rest unchanged
@@ -95,10 +104,17 @@ socket.on("sendMessage", async ({ content, channel_id, files }) => {
       // Also ACK to the sender
       socket.emit("messageAck", payload);
 
-      // ── NEW: Notify ALL channel members via their personal user rooms ──────────
+      // ── Notify ALL channel members via their personal user rooms ──────────────
       // This ensures sidebar indicators work even when the user isn't in the
       // channel socket room (e.g. they navigated away and ChannelChat left the room).
       await _notifyChannelMembers(io, channel_id, payload, channel);
+
+      // ── Notify @mentioned users with a dedicated event ────────────────────────
+      // Fires "newMentionNotification" to every user whose ID appears in a
+      // <span data-mention data-user-id="X"> node inside the message HTML.
+      if (content) {
+        await _notifyMentionedUsers(io, channel_id, payload, channel);
+      }
 
     } catch (err) {
       console.error("sendMessage error:", err);
@@ -195,6 +211,24 @@ socket.on("sendMessage", async ({ content, channel_id, files }) => {
         const paths = files.map((f) => f.path).filter(Boolean);
         if (paths.length) {
           await supabase.storage.from("images").remove(paths);
+        }
+      }
+
+      // If this is a parent message (not a reply), delete its thread row first.
+      // The fk_thread FK cascades that deletion to all reply messages automatically.
+      // We also do it explicitly here as a safety net for pre-migration environments.
+      if (!isThreadReply) {
+        const ownThread = await prisma.threads.findFirst({
+          where: { parent_message_id: msgId },
+          select: { id: true },
+        });
+        if (ownThread) {
+          await prisma.threads.delete({ where: { id: ownThread.id } });
+          // Tell clients to remove this thread from the Threads page
+          io.to(`channel_${resolvedChannelId}`).emit("threadDeleted", {
+            parent_message_id: msgId,
+            thread_id: ownThread.id,
+          });
         }
       }
 
@@ -517,4 +551,57 @@ function _stripHtml(html) {
   return html.replace(/<[^>]*>/g, "").replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
     .replace(/&nbsp;/g, " ").trim();
+}
+
+// ─── Helper: extract user IDs from TipTap mention nodes ───────────────────
+// Matches:  <span data-mention data-user-id="42">@Alice</span>
+function _extractMentionedUserIds(html) {
+  const regex = /data-user-id="(\d+)"/g;
+  const ids = new Set();
+  let match;
+  while ((match = regex.exec(html)) !== null) {
+    const n = Number(match[1]);
+    if (!isNaN(n) && n > 0) ids.add(n);
+  }
+  return [...ids];
+}
+
+// ─── Helper: emit newMentionNotification to each @mentioned member ─────────
+async function _notifyMentionedUsers(io, channel_id, payload, channel) {
+  try {
+    const mentionedIds = _extractMentionedUserIds(payload.content ?? "");
+    if (mentionedIds.length === 0) return;
+
+    const preview = _stripHtml(payload.content ?? "").slice(0, 120);
+
+    const notification = {
+      channel_id:   payload.channel_id,
+      channel_name: channel?.name ?? null,
+      is_dm:        channel?.is_dm ?? false,
+      message_id:   payload.id,
+      sender_id:    payload.sender_id,
+      sender_name:  payload.sender_name,
+      avatar_url:   payload.avatar_url,
+      preview,
+      created_at:   payload.created_at,
+    };
+
+    for (const userId of mentionedIds) {
+      // Don't notify the sender if they mentioned themselves
+      if (String(userId) === String(payload.sender_id)) continue;
+
+      // Verify the mentioned user is still a member of the channel
+      const isMember = await prisma.channel_members.findUnique({
+        where: {
+          channel_id_user_id: { channel_id, user_id: userId },
+        },
+        select: { user_id: true },
+      });
+      if (!isMember) continue;
+
+      io.to(`user_${userId}`).emit("newMentionNotification", notification);
+    }
+  } catch (err) {
+    console.error("_notifyMentionedUsers error:", err);
+  }
 }

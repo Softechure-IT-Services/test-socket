@@ -24,6 +24,11 @@ export const getThreadReplies = async (req, res) => {
       },
     });
 
+    const parentMsg = await prisma.messages.findUnique({
+      where: { id: messageId },
+      include: { users: { select: { id: true, name: true, avatar_url: true } } }
+    });
+
     const messages = thread?.messages ?? [];
 
     // ── Collect every user ID referenced in any reaction across all replies ──
@@ -79,7 +84,17 @@ export const getThreadReplies = async (req, res) => {
       };
     });
 
-    res.json({ thread_id: thread?.id ?? null, replies });
+    res.json({ 
+      thread_id: thread?.id ?? null, 
+      replies,
+      parent_message: parentMsg ? {
+        id: parentMsg.id,
+        content: parentMsg.content,
+        created_at: parentMsg.created_at,
+        sender_name: parentMsg.users?.name ?? "Unknown",
+        avatar_url: parentMsg.users?.avatar_url ?? null,
+      } : null
+    });
   } catch (err) {
     console.error("Fetch thread error:", err);
     res.status(500).json({ error: "DB Error" });
@@ -227,9 +242,7 @@ export const getAllThreads = async (req, res) => {
     const threads = await prisma.threads.findMany({
       where: {
         OR: [
-          // Public channels (not DMs) — visible to all users
           { channels: { is_private: false, is_dm: false } },
-          // Private channels / DMs — only for members
           { channel_id: { in: memberChannelIds } },
         ],
       },
@@ -247,7 +260,8 @@ export const getAllThreads = async (req, res) => {
       orderBy: { created_at: "desc" },
     });
 
-    // Hydrate parent messages so the UI can show context for each thread
+    // Hydrate parent messages. Filter out orphaned threads (parent was deleted
+    // before the cascade FK migration was applied — after migration these won't exist).
     const parentMessageIds = threads.map((t) => t.parent_message_id);
     const parentMessages = await prisma.messages.findMany({
       where: { id: { in: parentMessageIds } },
@@ -261,8 +275,29 @@ export const getAllThreads = async (req, res) => {
     });
     const parentMap = Object.fromEntries(parentMessages.map((m) => [m.id, m]));
 
-    // ── Collect ALL reaction user IDs across every reply in every thread ───────
-    // Single batch lookup so we never do N+1 queries for user names.
+    // ── Resolve DM partner names ─────────────────────────────────────────────
+    // DM channels have no name field — show the other member's name instead.
+    const dmChannelIds = threads
+      .filter((t) => t.channels?.is_dm)
+      .map((t) => t.channel_id);
+
+    let dmPartnerMap = {};
+    if (dmChannelIds.length > 0) {
+      const dmMembers = await prisma.channel_members.findMany({
+        where: {
+          channel_id: { in: dmChannelIds },
+          user_id: { not: userId },
+        },
+        include: {
+          users: { select: { name: true } },
+        },
+      });
+      dmPartnerMap = Object.fromEntries(
+        dmMembers.map((m) => [m.channel_id, m.users?.name ?? "Direct Message"])
+      );
+    }
+
+    // ── Collect ALL reaction user IDs across every reply in every thread ─────
     const reactionUserIds = new Set();
     for (const thread of threads) {
       for (const m of thread.messages) {
@@ -285,7 +320,6 @@ export const getAllThreads = async (req, res) => {
       : [];
     const reactionUserMap = Object.fromEntries(reactionUsers.map((u) => [u.id, u.name]));
 
-    // ── Helper: parse raw reactions string + hydrate bare IDs → { id, name } ──
     function hydrateReactions(raw) {
       let reactions = [];
       try { reactions = JSON.parse(raw || "[]"); } catch { return []; }
@@ -299,44 +333,48 @@ export const getAllThreads = async (req, res) => {
       }));
     }
 
-    const formatted = threads.map((thread) => {
-      const parent = parentMap[thread.parent_message_id];
-      const ch = thread.channels;
+    const formatted = threads
+      // Skip orphaned threads — parent message no longer exists
+      .filter((thread) => parentMap[thread.parent_message_id] != null)
+      .map((thread) => {
+        const parent = parentMap[thread.parent_message_id];
+        const ch = thread.channels;
 
-      return {
-        thread_id: thread.id,
-        channel_id: thread.channel_id,
-        channel_name: ch?.name ?? null,
-        is_dm: ch?.is_dm ?? false,
-        is_private: ch?.is_private ?? false,
-        parent_message: parent
-          ? {
-              id: parent.id,
-              content: parent.content,
-              sender_name: parent.users?.name ?? "Unknown",
-              avatar_url: parent.users?.avatar_url ?? null,
-              created_at: parent.created_at,
-            }
-          : null,
-        replies: thread.messages.map((m) => {
-          let files = [];
-          try { files = JSON.parse(m.files || "[]"); } catch {}
+        return {
+          thread_id: thread.id,
+          channel_id: thread.channel_id,
+          // For DMs, show the other member's name; for channels, show channel name
+          channel_name: ch?.is_dm
+            ? (dmPartnerMap[thread.channel_id] ?? "Direct Message")
+            : (ch?.name ?? null),
+          is_dm: ch?.is_dm ?? false,
+          is_private: ch?.is_private ?? false,
+          parent_message: {
+            id: parent.id,
+            content: parent.content,
+            sender_name: parent.users?.name ?? "Unknown",
+            avatar_url: parent.users?.avatar_url ?? null,
+            created_at: parent.created_at,
+          },
+          replies: thread.messages.map((m) => {
+            let files = [];
+            try { files = JSON.parse(m.files || "[]"); } catch {}
 
-          return {
-            id: m.id,
-            content: m.content,
-            created_at: m.created_at,
-            updated_at: m.updated_at,
-            sender_id: m.sender_id,
-            sender_name: m.users?.name ?? "Unknown",
-            avatar_url: m.users?.avatar_url ?? null,
-            files,
-            reactions: hydrateReactions(m.reactions),
-            pinned: m.pinned ?? false,
-          };
-        }),
-      };
-    });
+            return {
+              id: m.id,
+              content: m.content,
+              created_at: m.created_at,
+              updated_at: m.updated_at,
+              sender_id: m.sender_id,
+              sender_name: m.users?.name ?? "Unknown",
+              avatar_url: m.users?.avatar_url ?? null,
+              files,
+              reactions: hydrateReactions(m.reactions),
+              pinned: m.pinned ?? false,
+            };
+          }),
+        };
+      });
 
     res.json(formatted);
   } catch (err) {
@@ -344,6 +382,7 @@ export const getAllThreads = async (req, res) => {
     res.status(500).json({ error: "DB Error" });
   }
 };
+
 
 // Fan out a new-thread-reply notification to every channel member via their
 // personal user_<id> rooms. Skips the sender (they already know).

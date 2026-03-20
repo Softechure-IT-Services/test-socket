@@ -5,6 +5,8 @@ import {
   loginUser,
   refreshTokens,
   logoutUser,
+  requestPasswordReset,
+  resetPassword,
 } from "../controllers/auth.controller.js";
 
 import { hashToken } from "../controllers/auth.controller.js"; // optional export for cookies
@@ -105,6 +107,26 @@ router.post("/logout", async (req, res) => {
   } catch (err) {
     console.error("Logout error:", err);
     res.status(500).json({ error: "Server error" });
+  }
+});
+
+router.post("/forgot-password", async (req, res) => {
+  try {
+    const result = await requestPasswordReset(req.body);
+    res.json(result);
+  } catch (err) {
+    console.error("Forgot password error:", err);
+    res.status(err.status || 500).json({ error: err.message || "Server error" });
+  }
+});
+
+router.post("/reset-password", async (req, res) => {
+  try {
+    const result = await resetPassword(req.body);
+    res.json(result);
+  } catch (err) {
+    console.error("Reset password error:", err);
+    res.status(err.status || 500).json({ error: err.message || "Server error" });
   }
 });
 

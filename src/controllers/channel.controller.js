@@ -162,9 +162,14 @@ export const getChannelPinnedMessages = async (req, res) => {
     // Fetch thread IDs belonging to this channel so we can include thread replies
     const channelThreads = await prisma.threads.findMany({
       where: { channel_id: channelId },
-      select: { id: true },
+      select: { id: true, parent_message_id: true },
     });
     const threadIds = channelThreads.map((t) => t.id);
+
+    // Build a map: thread row ID → parent_message_id
+    const threadToParentMsgMap = Object.fromEntries(
+      channelThreads.map((t) => [t.id, t.parent_message_id])
+    );
 
     const messages = await prisma.messages.findMany({
       where: {
@@ -202,7 +207,11 @@ export const getChannelPinnedMessages = async (req, res) => {
       created_at: m.created_at,
       updated_at: m.updated_at,
       is_thread_reply: m.thread_parent_id !== null,
-      thread_parent_id: m.thread_parent_id ?? null,
+      // thread_parent_id is the thread TABLE row ID — resolve to the actual
+      // parent MESSAGE ID so the client can open the correct thread panel.
+      thread_parent_id: m.thread_parent_id !== null
+        ? (threadToParentMsgMap[m.thread_parent_id] ?? null)
+        : null,
       files: (() => {
         try { return JSON.parse(m.files ?? "[]"); }
         catch { return []; }
@@ -230,6 +239,7 @@ export const getChannelPinnedMessages = async (req, res) => {
     });
   }
 };
+
 
 
 
