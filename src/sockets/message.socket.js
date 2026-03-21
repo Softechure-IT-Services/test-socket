@@ -85,14 +85,24 @@ export default function registerMessageSockets(io, socket) {
         },
       });
 
+      // Prefer avatar_url from the DB row (always current) over socket.user which
+      // is a snapshot from connection time and goes stale after profile updates.
+      const freshAvatarUrl = message.users?.avatar_url ?? socket.user.avatar_url ?? null;
+      const freshName      = message.users?.name      ?? socket.user.name;
+
+      // Also keep socket.user in sync so future messages in this session are correct
+      // without waiting for a reconnect.
+      socket.user.avatar_url = freshAvatarUrl;
+      socket.user.name       = freshName;
+
       const payload = {
         id: message.id,
         channel_id: message.channel_id,
         content: message.content,
         files: JSON.parse(message.files || "[]"),
         sender_id: message.sender_id,
-        sender_name: socket.user.name,
-        avatar_url: socket.user.avatar_url,
+        sender_name: freshName,
+        avatar_url: freshAvatarUrl,
         created_at: message.created_at,
         updated_at: message.updated_at,
         is_edited: false,
@@ -523,7 +533,6 @@ async function _notifyChannelMembers(io, channel_id, payload, channel) {
 
     // Build the lightweight notification payload
     const notification = {
-      id: payload.id,           // ← client dedup key uses msg.id
       channel_id: payload.channel_id,
       message_id: payload.id,
       sender_id: payload.sender_id,

@@ -96,8 +96,28 @@ export function initSocket(server) {
     registerChannelSockets(io, socket);
     registerMessageSockets(io, socket);
     registerConnectionHuddleSockets(io, socket);
+
+    // ── Keep socket.user fresh after profile updates ──────────────────────
+    // The client emits this right after a successful profile save so that
+    // subsequent messages use the correct name/avatar without a reconnect.
+    socket.on("refreshUserProfile", async () => {
+      try {
+        const fresh = await prisma.users.findUnique({
+          where: { id: socket.user.id },
+          select: { id: true, name: true, email: true, avatar_url: true },
+        });
+        if (fresh) {
+          socket.user.name       = fresh.name;
+          socket.user.avatar_url = fresh.avatar_url;
+          socket.user.email      = fresh.email;
+          // Echo the updated profile back so the client can update its auth context
+          socket.emit("userProfileRefreshed", fresh);
+        }
+      } catch (err) {
+        console.error("refreshUserProfile error:", err.message);
+      }
+    });
   });
 
   return io;
 }
-
