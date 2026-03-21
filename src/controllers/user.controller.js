@@ -122,6 +122,7 @@ export const setUserOnlineStatus = async (userId, isOnline) => {
     select: {
       id: true,
       is_online: true,
+      last_seen: true,
     },
   });
 };

@@ -146,6 +146,8 @@ export const searchAll = async (req, res) => {
               name: true,
               email: true,
               avatar_url: true,
+              is_online: true,
+              last_seen: true,
             },
             orderBy: { name: "asc" },
             take: 5,

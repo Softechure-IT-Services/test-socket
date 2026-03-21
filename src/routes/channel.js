@@ -135,7 +135,13 @@ const allUsers = await prisma.users.findMany({
       ? { name: { contains: query } }  // ← remove mode: "insensitive"
       : {}),
   },
-  select: { id: true, name: true, avatar_url: true },
+  select: {
+    id: true,
+    name: true,
+    avatar_url: true,
+    is_online: true,
+    last_seen: true,
+  },
   orderBy: { name: "asc" },
   take: isDefault ? 10 : 30,
 });
@@ -155,14 +161,30 @@ const allUsers = await prisma.users.findMany({
       if (!otherUser) continue;
       if (!query || otherUser.name.toLowerCase().includes(query)) {
         dmUserIds.add(otherUser.id);
-        results.push({ id: ch.id, name: otherUser.name, kind: "dm", userId: otherUser.id });
+        results.push({
+          id: ch.id,
+          name: otherUser.name,
+          kind: "dm",
+          userId: otherUser.id,
+          avatar_url: otherUser.avatar_url ?? null,
+          is_online: !!otherUser.is_online,
+          last_seen: otherUser.last_seen,
+        });
       }
     }
 
     // Add all users NOT already represented by a DM above
     for (const u of allUsers) {
       if (dmUserIds.has(u.id)) continue; // already shown via DM channel
-      results.push({ id: u.id, name: u.name, kind: "user", userId: u.id });
+      results.push({
+        id: u.id,
+        name: u.name,
+        kind: "user",
+        userId: u.id,
+        avatar_url: u.avatar_url ?? null,
+        is_online: !!u.is_online,
+        last_seen: u.last_seen,
+      });
     }
 
     res.json(results);
@@ -427,6 +449,8 @@ router.get("/:channelId/members", async (req, res) => {
             name: true,
             email: true,
             avatar_url: true,
+            is_online: true,
+            last_seen: true,
           },
         },
       },
@@ -478,7 +502,14 @@ router.post("/:channelId/members", async (req, res) => {
 
     const newMember = await prisma.users.findUnique({
       where: { id: Number(userId) },
-      select: { id: true, name: true, email: true, avatar_url: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        avatar_url: true,
+        is_online: true,
+        last_seen: true,
+      },
     });
 
     const requester = await prisma.users.findUnique({
@@ -694,7 +725,14 @@ router.post("/:channelId/join", async (req, res) => {
 
     const joiningUser = await prisma.users.findUnique({
       where: { id: userId },
-      select: { id: true, name: true, email: true, avatar_url: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        avatar_url: true,
+        is_online: true,
+        last_seen: true,
+      },
     });
 
     io.to(`user_${userId}`).emit("addedToChannel", {
@@ -756,7 +794,15 @@ router.get("/:id", async (req, res) => {
           user_id: { not: userId },
         },
         include: {
-          users: { select: { id: true, name: true, avatar_url: true } },
+          users: {
+            select: {
+              id: true,
+              name: true,
+              avatar_url: true,
+              is_online: true,
+              last_seen: true,
+            },
+          },
         },
       });
 
@@ -770,7 +816,16 @@ router.get("/:id", async (req, res) => {
     const members = await prisma.channel_members.findMany({
       where: { channel_id: channelId },
       include: {
-        users: { select: { id: true, name: true, email: true } },
+        users: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            avatar_url: true,
+            is_online: true,
+            last_seen: true,
+          },
+        },
       },
     });
 

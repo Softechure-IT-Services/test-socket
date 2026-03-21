@@ -523,6 +523,7 @@ async function _notifyChannelMembers(io, channel_id, payload, channel) {
 
     // Build the lightweight notification payload
     const notification = {
+      id: payload.id,           // ← client dedup key uses msg.id
       channel_id: payload.channel_id,
       message_id: payload.id,
       sender_id: payload.sender_id,

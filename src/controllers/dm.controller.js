@@ -76,12 +76,24 @@ select: { id: true, name: true, is_private: true },
     });
 const creator = await prisma.users.findUnique({
   where: { id: userId },
-  select: { id: true, name: true, avatar_url: true },
+  select: {
+    id: true,
+    name: true,
+    avatar_url: true,
+    is_online: true,
+    last_seen: true,
+  },
 });
 
 const other = await prisma.users.findUnique({
   where: { id: otherUserId },
-  select: { id: true, name: true, avatar_url: true },
+  select: {
+    id: true,
+    name: true,
+    avatar_url: true,
+    is_online: true,
+    last_seen: true,
+  },
 });
 
 // Emit full DM info
@@ -95,8 +107,20 @@ const other = await prisma.users.findUnique({
   io.to(`user_${uid}`).emit("dmCreated", {
     channel_id: dmChannel.id,
     members: [
-      { id: creator.id, name: creator.name, avatar_url: creator.avatar_url },
-      { id: other.id,    name: other.name,   avatar_url: other.avatar_url },
+      {
+        id: creator.id,
+        name: creator.name,
+        avatar_url: creator.avatar_url,
+        is_online: !!creator.is_online,
+        last_seen: creator.last_seen,
+      },
+      {
+        id: other.id,
+        name: other.name,
+        avatar_url: other.avatar_url,
+        is_online: !!other.is_online,
+        last_seen: other.last_seen,
+      },
     ],
   });
 });
@@ -146,6 +170,8 @@ export const listMyDMs = async (req, res) => {
                 id: true,
                 name: true,
                 avatar_url: true,
+                is_online: true,
+                last_seen: true,
               },
             },
           },
@@ -162,6 +188,8 @@ export const listMyDMs = async (req, res) => {
         avatar_url: otherUser?.avatar_url,
         is_private: dm.is_private,
         is_dm: dm.is_dm,
+        is_online: otherUser?.is_online ?? false,
+        last_seen: otherUser?.last_seen ?? null,
       };
     });
 
