@@ -30,6 +30,7 @@ export const searchAll = async (req, res) => {
       const visibleChannels = await prisma.channels.findMany({
         where: {
           is_dm: false,
+          channel_left: { none: { user_id: userId } },
           OR: [
             { is_private: false },
             { channel_members: { some: { user_id: userId } } },
@@ -104,12 +105,13 @@ export const searchAll = async (req, res) => {
     const q = term;
 
     // ── 1. Channels ───────────────────────────────────────────────────────────
-    const channels =
+    const rawChannels =
       mode === "people"
         ? []
         : await prisma.channels.findMany({
             where: {
               is_dm: false,
+              channel_left: { none: { user_id: userId } },
               ...(q ? { name: { contains: q } } : {}),
               OR: [
                 { is_private: false },
@@ -124,6 +126,8 @@ export const searchAll = async (req, res) => {
             orderBy: { name: "asc" },
             take: 5,
           });
+
+    const channels = rawChannels.map((c) => ({ ...c, kind: "channel" }));
 
     // ── 2. People ─────────────────────────────────────────────────────────────
     const rawPeople =
@@ -196,6 +200,7 @@ export const searchAll = async (req, res) => {
       } else if (mode === "all") {
         const visibleChannels = await prisma.channels.findMany({
           where: {
+            channel_left: { none: { user_id: userId } },
             OR: [
               { is_private: false },
               { channel_members: { some: { user_id: userId } } },
@@ -251,15 +256,16 @@ export const searchAll = async (req, res) => {
         );
 
         messages = rawMessages.map((m) => {
-          console.log('Search message:', { id: m.id, thread_parent_id: m.thread_parent_id, channel_id: m.channel_id });
+          // console.log('Search message:', { id: m.id, thread_parent_id: m.thread_parent_id, channel_id: m.channel_id });
           const mChannelId = m.channel_id || threadToChannelMap[m.thread_parent_id];
+          const parentMsgId = m.thread_parent_id ? (threadToParentMsgMap[m.thread_parent_id] ?? null) : null;
           return {
             id: m.id,
             content: m.content,
             created_at: m.created_at,
             channel_id: mChannelId,
-            // For replies, use the parent message id instead of thread id
-            thread_parent_id: m.thread_parent_id ? (threadToParentMsgMap[m.thread_parent_id] ?? null) : null,
+            is_thread_reply: !!parentMsgId,
+            thread_parent_id: parentMsgId,
             channel_name: mChannelId ? (channelMap[mChannelId]?.name ?? null) : null,
             is_dm_channel: mChannelId ? (channelMap[mChannelId]?.is_dm ?? false) : false,
             sender_name: m.users?.name ?? null,
