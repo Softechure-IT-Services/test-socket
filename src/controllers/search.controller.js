@@ -214,9 +214,13 @@ export const searchAll = async (req, res) => {
       if (scopedChannelIds.length > 0) {
         const threadsInChannels = await prisma.threads.findMany({
           where: { channel_id: { in: scopedChannelIds } },
-          select: { id: true, channel_id: true }
+          select: { id: true, channel_id: true, parent_message_id: true }
         });
         const threadIds = threadsInChannels.map(t => t.id);
+        const threadToParentMsgMap = Object.fromEntries(
+          threadsInChannels.map(t => [t.id, t.parent_message_id])
+        );
+        // console.log('threadsInChannels:', threadsInChannels, 'threadIds:', threadIds, 'threadToParentMsgMap:', threadToParentMsgMap);
 
         const rawMessages = await prisma.messages.findMany({
           where: {
@@ -247,13 +251,15 @@ export const searchAll = async (req, res) => {
         );
 
         messages = rawMessages.map((m) => {
+          console.log('Search message:', { id: m.id, thread_parent_id: m.thread_parent_id, channel_id: m.channel_id });
           const mChannelId = m.channel_id || threadToChannelMap[m.thread_parent_id];
           return {
             id: m.id,
             content: m.content,
             created_at: m.created_at,
             channel_id: mChannelId,
-            thread_parent_id: m.thread_parent_id ?? null,
+            // For replies, use the parent message id instead of thread id
+            thread_parent_id: m.thread_parent_id ? (threadToParentMsgMap[m.thread_parent_id] ?? null) : null,
             channel_name: mChannelId ? (channelMap[mChannelId]?.name ?? null) : null,
             is_dm_channel: mChannelId ? (channelMap[mChannelId]?.is_dm ?? false) : false,
             sender_name: m.users?.name ?? null,
@@ -261,6 +267,7 @@ export const searchAll = async (req, res) => {
             kind: "message",
           };
         });
+        console.log('Final messages:', messages);
       }
     }
 
