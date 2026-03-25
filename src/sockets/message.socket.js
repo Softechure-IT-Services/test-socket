@@ -220,7 +220,7 @@ export default function registerMessageSockets(io, socket) {
       if (Array.isArray(files) && files.length) {
         const paths = files.map((f) => f.path).filter(Boolean);
         if (paths.length) {
-          await supabase.storage.from("images").remove(paths);
+          await supabase.storage.from("all files").remove(paths);
         }
       }
 

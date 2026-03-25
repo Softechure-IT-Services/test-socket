@@ -217,7 +217,7 @@ socket.on("deleteMessage", ({ id }) => {
 
         if (paths.length > 0) {
           const { error } = await supabase.storage
-            .from("images")
+            .from("all files")
             .remove(paths);
 
           if (error) {

@@ -7,14 +7,11 @@ import supabase from "../utils/supabase.js";
 const router = express.Router();
 
 /* ---------- SECURITY ---------- */
-const ALLOWED_MIME = [
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-  "image/gif",
-  "application/pdf",
-  "video/mp4",
-];
+// Mirrors the bucket policy: image/*, application/pdf, video/*
+const isAllowedMime = (mime) =>
+  mime.startsWith("image/") ||
+  mime.startsWith("video/") ||
+  mime === "application/pdf";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -22,7 +19,7 @@ const upload = multer({
     fileSize: 20 * 1024 * 1024, // 20MB
   },
   fileFilter(req, file, cb) {
-    if (!ALLOWED_MIME.includes(file.mimetype)) {
+    if (!isAllowedMime(file.mimetype)) {
       cb(new Error("File type not allowed"));
     } else {
       cb(null, true);
@@ -45,7 +42,7 @@ router.post("/", upload.array("files", 10), async (req, res) => {
       const filePath = `chat/${Date.now()}-${randomName}`;
 
       const { error } = await supabase.storage
-        .from("images")
+        .from("all files")
         .upload(filePath, file.buffer, {
           contentType: file.mimetype,
           upsert: false,
@@ -57,7 +54,7 @@ router.post("/", upload.array("files", 10), async (req, res) => {
       }
 
       const { data: signed } = await supabase.storage
-        .from("images")
+        .from("all files")
         .createSignedUrl(filePath, 60 * 60 * 24 * 7);
 
       uploaded.push({
@@ -90,7 +87,7 @@ router.post("/delete", async (req, res) => {
     }
 
     const { error } = await supabase.storage
-      .from("images")
+      .from("all files")
       .remove([path]);
 
     if (error) {

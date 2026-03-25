@@ -20,7 +20,7 @@ export const uploadFiles = async (req, res) => {
       const filePath = `chat/${Date.now()}-${randomName}`;
 
       const { error } = await supabase.storage
-        .from("images")
+        .from("all files")
         .upload(filePath, file.buffer, {
           contentType: file.mimetype,
           upsert: false,
@@ -32,7 +32,7 @@ export const uploadFiles = async (req, res) => {
       }
 
       const { data: signed } = await supabase.storage
-        .from("images")
+        .from("all files")
         .createSignedUrl(filePath, 60 * 60 * 24 * 7); // 7 days
 
       uploaded.push({
@@ -67,7 +67,7 @@ export const deleteFile = async (req, res) => {
     }
 
     const { error } = await supabase.storage
-      .from("images")
+      .from("all files")
       .remove([path]);
 
     if (error) {
