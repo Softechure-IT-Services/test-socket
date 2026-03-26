@@ -56,6 +56,7 @@ export const searchUsers = async (q, exclude) => {
       id: true,
       name: true,
       avatar_url: true,
+      is_online: true,
     },
     take: 20,
     orderBy: { name: "asc" },

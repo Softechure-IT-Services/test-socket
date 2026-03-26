@@ -206,11 +206,28 @@ export const searchAll = async (req, res) => {
               { channel_members: { some: { user_id: userId } } },
             ],
           },
-          select: { id: true, name: true, is_dm: true },
+          select: {
+            id: true,
+            name: true,
+            is_dm: true,
+            channel_members: {
+              where: { user_id: { not: userId } },
+              select: { users: { select: { name: true } } },
+              take: 1,
+            },
+          },
         });
         scopedChannelIds = visibleChannels.map((c) => c.id);
         channelMap = Object.fromEntries(
-          visibleChannels.map((c) => [c.id, { name: c.name, is_dm: c.is_dm }])
+          visibleChannels.map((c) => [
+            c.id,
+            {
+              name: c.is_dm
+                ? (c.channel_members[0]?.users?.name ?? c.name)
+                : c.name,
+              is_dm: c.is_dm,
+            },
+          ])
         );
       }
 
