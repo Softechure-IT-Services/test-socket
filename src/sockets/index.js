@@ -75,7 +75,15 @@ function releaseUserConnection(userId) {
 export function initSocket(server) {
   io = new Server(server, {
     cors: {
-      origin: "https://test-socket-client-steel.vercel.app",
+      origin: [
+        "http://localhost:3000",
+        "http://localhost:5000",
+        "http://192.168.1.14:3000",
+        "http://192.168.1.15:3000",
+        "http://192.168.0.113:5000",
+        "https://softechat.vercel.app",
+        "https://test-socket-client-steel.vercel.app",
+      ],
       credentials: true,
     },
   });
@@ -104,10 +112,11 @@ export function initSocket(server) {
       try {
         const fresh = await prisma.users.findUnique({
           where: { id: socket.user.id },
-          select: { id: true, name: true, email: true, avatar_url: true },
+          select: { id: true, name: true, username: true, email: true, avatar_url: true },
         });
         if (fresh) {
           socket.user.name       = fresh.name;
+          socket.user.username   = fresh.username;
           socket.user.avatar_url = fresh.avatar_url;
           socket.user.email      = fresh.email;
           // Echo the updated profile back so the client can update its auth context

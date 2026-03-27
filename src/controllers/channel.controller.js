@@ -1,387 +1,193 @@
 import prisma from "../config/prisma.js";
 import { io } from "../sockets/index.js";
 
-// export const getChannelFiles = async (req, res) => {
-//   try {
-//     const channelId = Number(req.params.channelId);
-
-//     if (!channelId) {
-//       return res.status(400).json({
-//         success: false,
-//         message: "Invalid channel id",
-//       });
-//     }
-
-//     const messages = await prisma.messages.findMany({
-//       where: {
-//         channel_id: channelId,
-//         files: {
-//           not: null,
-//         },
-//       },
-//       select: {
-//         id: true,
-//         files: true,
-//         created_at: true,
-//         users: {
-//           select: {
-//             id: true,
-//             name: true,
-//             avatar_url: true,
-//           },
-//         },
-//       },
-//       orderBy: {
-//         created_at: "desc",
-//       },
-//     });
-
-//     const files = messages.map(m => ({
-//       message_id: m.id,
-//       file: m.files, // parse if JSON string
-//       created_at: m.created_at,
-//       sender: {
-//         id: m.users.id,
-//         name: m.users.name,
-//         avatar_url: m.users.avatar_url,
-//       },
-//     }));
-
-//     res.status(200).json({
-//       success: true,
-//       data: {
-//         channel_id: channelId,
-//         total: files.length,
-//         files,
-//       },
-//     });
-//   } catch (error) {
-//     console.error("Get channel files error:", error);
-//     res.status(500).json({
-//       success: false,
-//       message: "Internal server error",
-//     });
-//   }
-// };
-
-
 export const getChannelFiles = async (req, res) => {
+  const { channelId } = req.params;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 30;
+
   try {
-    const channelId = Number(req.params.channelId);
-    if (!channelId) {
-      return res.status(400).json({ success: false, message: "Invalid channel id" });
-    }
-
-    const page  = Math.max(1, Number(req.query.page)  || 1);
-    const limit = Math.min(100, Number(req.query.limit) || 20);
-    const skip  = (page - 1) * limit;
-
-    // Fetch thread IDs belonging to this channel so we can include thread replies
-    const channelThreads = await prisma.threads.findMany({
-      where: { channel_id: channelId },
-      select: { id: true },
-    });
-    const threadIds = channelThreads.map((t) => t.id);
-
     const messages = await prisma.messages.findMany({
       where: {
-        OR: [
-          { channel_id: channelId },
-          ...(threadIds.length > 0 ? [{ thread_parent_id: { in: threadIds } }] : []),
-        ],
-        AND: [
-          { files: { not: null } },
-          { files: { not: "[]" } },
-          { files: { not: "" } },
-        ],
-      },
-      select: {
-        id: true,
-        files: true,
-        created_at: true,
-        thread_parent_id: true,
-        users: {
-          select: { id: true, name: true, avatar_url: true },
-        },
+        channel_id: Number(channelId),
+        files: { not: null },
       },
       orderBy: { created_at: "desc" },
-      skip,
-      take: limit,
+      include: {
+        users: { select: { id: true, name: true, username: true, avatar_url: true } }
+      }
     });
 
-    const files = messages.flatMap((message) => {
-      let parsedFiles = [];
+    const allFiles = messages.flatMap((m) => {
       try {
-        parsedFiles = JSON.parse(message.files);
+        let parsedFiles = [];
+        if (typeof m.files === 'string') {
+          // ignore empty or '[]'
+          if (!m.files.trim() || m.files === '[]') return [];
+          parsedFiles = JSON.parse(m.files);
+        } else if (Array.isArray(m.files)) {
+          parsedFiles = m.files;
+        }
+
+        return parsedFiles.map(f => ({
+          message_id: m.id,
+          file: f.url || f.file || "",
+          url: f.url || f.file || "",
+          created_at: m.created_at,
+          sender: {
+            id: m.users?.id,
+            name: m.users?.username || m.users?.name || "Unknown",
+            avatar_url: m.users?.avatar_url || null,
+          },
+          name: f.name || "unnamed file",
+          type: f.type || "",
+          size: f.size || 0
+        }));
       } catch {
         return [];
       }
-
-      return parsedFiles.map((file) => ({
-        message_id: message.id,
-        created_at: message.created_at,
-        is_thread_reply: message.thread_parent_id !== null,
-        thread_parent_id: message.thread_parent_id ?? null,
-        sender: {
-          id: message.users.id,
-          name: message.users.name,
-          avatar_url: message.users.avatar_url,
-        },
-        ...file,
-      }));
     });
 
-    res.status(200).json({
+    const startIndex = (page - 1) * limit;
+    const paginatedFiles = allFiles.slice(startIndex, startIndex + limit);
+
+    res.json({
       success: true,
       data: {
-        channel_id: channelId,
-        page,
-        limit,
-        total: files.length,
-        files,
-      },
+        files: paginatedFiles
+      }
     });
-  } catch (error) {
-    console.error("Get channel files error:", error);
-    res.status(500).json({ success: false, message: "Internal server error" });
+  } catch (err) {
+    console.error("getChannelFiles error:", err);
+    res.status(500).json({ error: "Failed to fetch files" });
   }
 };
 
-
 export const getChannelPinnedMessages = async (req, res) => {
+  const { channelId } = req.params;
   try {
-    const channelId = Number(req.params.channelId);
-
-    if (!channelId) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid channel id",
-      });
-    }
-
-    // Fetch thread IDs belonging to this channel so we can include thread replies
-    const channelThreads = await prisma.threads.findMany({
-      where: { channel_id: channelId },
-      select: { id: true, parent_message_id: true },
-    });
-    const threadIds = channelThreads.map((t) => t.id);
-
-    // Build a map: thread row ID → parent_message_id
-    const threadToParentMsgMap = Object.fromEntries(
-      channelThreads.map((t) => [t.id, t.parent_message_id])
-    );
-
-    const messages = await prisma.messages.findMany({
+    const pins = await prisma.messages.findMany({
       where: {
+        channel_id: Number(channelId),
         pinned: true,
-        OR: [
-          { channel_id: channelId },
-          ...(threadIds.length > 0 ? [{ thread_parent_id: { in: threadIds } }] : []),
-        ],
       },
-      select: {
-        id: true,
-        content: true,
-        pinned: true,
-        files: true,
-        thread_parent_id: true,
-        created_at: true,
-        updated_at: true,
+      include: {
         users: {
           select: {
             id: true,
+            username: true,
             name: true,
             avatar_url: true,
           },
         },
+        // Include the thread relation so we can expose both the
+        // thread id and the parent message id for pinned replies.
+        thread: {
+          select: {
+            id: true,
+            parent_message_id: true,
+          },
+        },
       },
-      orderBy: {
-        updated_at: "desc",
-      },
+      orderBy: { updated_at: "desc" },
     });
 
-    const pinnedMessages = messages.map(m => ({
-      message_id: m.id,
-      content: m.content,
-      pinned: m.pinned,
-      created_at: m.created_at,
-      updated_at: m.updated_at,
-      is_thread_reply: m.thread_parent_id !== null,
-      // thread_parent_id is the thread TABLE row ID — resolve to the actual
-      // parent MESSAGE ID so the client can open the correct thread panel.
-      thread_parent_id: m.thread_parent_id !== null
-        ? (threadToParentMsgMap[m.thread_parent_id] ?? null)
-        : null,
-      files: (() => {
-        try { return JSON.parse(m.files ?? "[]"); }
-        catch { return []; }
-      })(),
+    const formatted = pins.map((p) => ({
+      message_id: p.id,
+      content: p.content,
+      pinned: true,
+      created_at: p.created_at,
+      updated_at: p.updated_at,
       sender: {
-        id: m.users.id,
-        name: m.users.name,
-        avatar_url: m.users.avatar_url,
+        id: p.users.id,
+        name: p.users.username || p.users.name,
+        avatar_url: p.users.avatar_url,
       },
+      files: p.files ? JSON.parse(p.files) : [],
+      // Thread metadata so the client can:
+      // - open the thread panel when a pinned reply is clicked
+      // - scroll the thread panel directly to the reply.
+      is_thread_reply: !!p.thread_parent_id,
+      thread_parent_id: p.thread_parent_id,
+      thread_parent_message_id: p.thread?.parent_message_id ?? null,
+      parent_message_id: p.thread?.parent_message_id ?? null,
+      thread_id: p.thread?.id ?? null,
     }));
 
-    res.status(200).json({
+    res.json({
       success: true,
       data: {
-        channel_id: channelId,
-        total: pinnedMessages.length,
-        pinned_messages: pinnedMessages,
+        pinned_messages: formatted,
       },
     });
-  } catch (error) {
-    console.error("Get pinned messages error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+  } catch (err) {
+    console.error("getChannelPinnedMessages error:", err);
+    res.status(500).json({ error: "Failed to fetch pins" });
   }
 };
 
-
-
-
 export const createOrCheckChannel = async (req, res) => {
-  console.log("Authenticated user:", req.user);
+  const { name, is_private, isPrivate, description, create, memberIds } = req.body;
+  const userId = req.user.id;
+
+  const actualIsPrivate = isPrivate !== undefined ? isPrivate : is_private;
+
+  if (create === false) {
+    if (!name) return res.json({ data: { available: false } });
+    try {
+      const existing = await prisma.channels.findUnique({
+        where: { name },
+      });
+      return res.json({ data: { available: !existing } });
+    } catch (err) {
+      return res.status(500).json({ error: "Failed to check name" });
+    }
+  }
+
   try {
-    const { name, isPrivate, memberIds = [], create = false } = req.body;
-    const userId = req.user.id;
-    // const userId = 87;
+    const additionalMembers = (memberIds || [])
+      .filter((id) => Number(id) !== Number(userId))
+      .map((id) => ({ user_id: Number(id) }));
 
-    if (!name || !name.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: "Channel name required",
-      });
-    }
-
-    const channelName = name.trim();
-
-    // 🔍 Check unique channel name
-    const existingChannel = await prisma.channels.findFirst({
-      where: {
-        name: channelName,
-      },
-      select: {
-        id: true,
+    const channel = await prisma.channels.create({
+      data: {
+        name,
+        is_private: !!actualIsPrivate,
+        description,
+        created_by: userId,
+        channel_members: {
+          create: [{ user_id: userId }, ...additionalMembers],
+        },
       },
     });
 
-    // ❌ Name already exists
-    if (existingChannel) {
-      return res.status(200).json({
-        success: true,
-        data: {
-          available: false,
-          message: "Channel name already exists",
-        },
-      });
-    }
-
-    // ✅ Only checking availability
-    if (!create) {
-      return res.status(200).json({
-        success: true,
-        data: {
-          available: true,
-          message: "Channel name is available",
-        },
-      });
-    }
-
-    // ❌ Private channel validation
-    if (isPrivate && memberIds.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Private channel needs members",
-      });
-    }
-
-    // 🔒 Create channel transaction
-    const result = await prisma.$transaction(async (tx) => {
-      const channel = await tx.channels.create({
-        data: {
-          name: channelName,
-          is_private: isPrivate ?? false,
-          is_dm: false,
-          created_by: userId,
-        },
-      });
-
-      // 🟢 Public channel — still add creator to channel_members so they can leave
-      if (!isPrivate) {
-        await tx.channel_members.create({
-          data: {
-            channel_id: channel.id,
-            user_id: userId,
-          },
-        });
-
-        return {
-          id: channel.id,
-          name: channel.name,
-          isPrivate: false,
-        };
+    if (io) {
+      const channelPayload = { id: channel.id, name: channel.name, is_private: channel.is_private, is_dm: false };
+      
+      // Only broadcast to everyone if the channel is PUBLIC
+      if (!channel.is_private) {
+        io.emit("channelCreated", channelPayload);
       }
-
-      // 🔐 Private channel members
-      const uniqueMemberIds = Array.from(
-        new Set([userId, ...memberIds])
-      );
-
-      await tx.channel_members.createMany({
-        data: uniqueMemberIds.map((uid) => ({
-          channel_id: channel.id,
-          user_id: uid,
-        })),
-        skipDuplicates: true,
+      
+      // Notify the creator (always)
+      io.to(`user_${userId}`).emit("addedToChannel", { channelId: channel.id, channel: channelPayload });
+      
+      // Notify newly batched members
+      additionalMembers.forEach(({ user_id }) => {
+        io.to(`user_${user_id}`).emit("addedToChannel", {
+          channelId: channel.id,
+          channelName: channel.name,
+          channel: channelPayload
+        });
       });
+    }
 
-      return {
-        id: channel.id,
-        name: channel.name,
-        isPrivate: true,
-        members: uniqueMemberIds,
-      };
-    });
-
-    // 📢 Socket event
-    // io.emit("channelCreated", {
-    //   id: result.id,
-    //   name: result.name,
-    //   isPrivate: result.isPrivate,
-    // });
-
-    // 🔒 Only private members
-if (result.isPrivate && result.members?.length > 0) {
-  result.members.forEach((uid) => {
-    io.to(`user_${uid}`).emit("channelCreated", {
-      id: result.id,
-      name: result.name,
-      isPrivate: true,
-      members: result.members,
-    });
-  });
-} else {
-  // Public channel → emit to everyone
-  io.emit("channelCreated", {
-    id: result.id,
-    name: result.name,
-    isPrivate: false,
-  });
-}
-
-    res.status(201).json({
-      success: true,
-      data: result,
-    });
+    res.status(201).json({ data: channel });
   } catch (err) {
-    console.error("Create channel error:", err);
-    res.status(500).json({
-      success: false,
-      message: err.message,
-    });
+    console.error("createChannel error:", err);
+    if (err.code === "P2002") {
+      return res.status(409).json({ error: "Channel name already exists" });
+    }
+    res.status(500).json({ error: "Failed to create channel" });
   }
 };

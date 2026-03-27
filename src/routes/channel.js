@@ -13,6 +13,7 @@ import {
 } from "../controllers/channel.controller.js";
 import path from "path";
 import fs from "fs";
+import { getPreviewText } from "../utils/format.js";
 
 router.use(verifyToken);
 
@@ -291,6 +292,7 @@ router.get("/:channelId/messages", async (req, res) => {
     const messages = await prisma.messages.findMany({
       where: {
         channel_id: channelId,
+        thread_parent_id: null,
         ...(cursor && { id: { lt: cursor } }),
         ...(after  && { id: { gt: after  } }),
       },
@@ -1279,7 +1281,28 @@ router.post(
 
       io.to(`channel_${targetChannelId}`).emit("receiveMessage", payload);
 
-      res.json({ success: true, message: payload });
+            try {
+        const channelInfo = await prisma.channels.findUnique({ where: { id: targetChannelId }, select: { name: true, is_dm: true }});
+        const members = await prisma.channel_members.findMany({ where: { channel_id: targetChannelId }, select: { user_id: true }});
+        let rawContent = newMessage.content;
+        if (newMessage.is_forwarded) rawContent = "Forwarded a message";
+        const previewText = getPreviewText(rawContent, payload.files);
+        members.forEach((m) => {
+          if (String(m.user_id) === String(userId)) return;
+          io.to(`user_${m.user_id}`).emit("newMessageNotification", {
+            channel_id: targetChannelId,
+            message_id: newMessage.id,
+            sender_id: userId,
+            sender_name: payload.sender_name,
+            avatar_url: payload.avatar_url,
+            preview: previewText,
+            channel_name: channelInfo?.name,
+            is_dm: channelInfo?.is_dm === true,
+            created_at: new Date().toISOString()
+          });
+        });
+      } catch (err) { }
+res.json({ success: true, message: payload });
     } catch (err) {
       console.error("Forward error:", err);
       res.status(500).json({ error: "Forward failed" });

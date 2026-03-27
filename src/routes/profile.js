@@ -22,10 +22,23 @@ import prisma from "../config/prisma.js";
 import verifyToken from "../middleware/auth.js";
 import supabase from "../utils/supabase.js";
 import { io } from "../sockets/index.js";
+import { isUsernameAvailable, normaliseUsername, validateUsername } from "../controllers/auth.controller.js";
 
 const router = express.Router();
 
-// All routes require authentication
+// ─── GET /users/check-username ────────────────────────────────────────────────
+// Public — no auth required. Used by signup form.
+// Query: ?username=<username>
+router.get("/check-username", async (req, res) => {
+  const raw = typeof req.query.username === "string" ? req.query.username : "";
+  const norm = normaliseUsername(raw);
+  const error = validateUsername(norm);
+  if (error) return res.json({ available: false, error });
+  const available = await isUsernameAvailable(norm);
+  return res.json({ available });
+});
+
+// All routes below require authentication
 router.use(verifyToken);
 
 // ─── Resolve user ID from token payload ───────────────────────────────────────
@@ -103,15 +116,12 @@ router.get("/me", async (req, res) => {
       select: {
         id: true,
         name: true,
+        username: true,
         email: true,
         avatar_url: true,
         is_online: true,
         last_seen: true,
         created_at: true,
-        // status and bio are optional columns — add them to your Prisma schema
-        // and run `prisma migrate dev` if they don't exist yet:
-        //   status  String?  @db.VarChar(255)
-        //   bio     String?  @db.Text
         status: true,
         bio: true,
       },
@@ -126,12 +136,13 @@ router.get("/me", async (req, res) => {
   }
 });
 
+
 // ─── PATCH /users/me ──────────────────────────────────────────────────────────
-// Update display name, status, and/or bio.
-// Body: { name?, status?, bio? }
+// Update display name, username, status, and/or bio.
+// Body: { name?, username?, status?, bio? }
 
 router.patch("/me", async (req, res) => {
-  const { name, status, bio } = req.body;
+  const { name, username, status, bio } = req.body;
 
   // Build only the fields that were actually sent
   const data = {};
@@ -140,6 +151,16 @@ router.patch("/me", async (req, res) => {
     if (!trimmed) return res.status(400).json({ error: "Name cannot be empty." });
     data.name = trimmed;
   }
+
+  if (username !== undefined) {
+    const norm = normaliseUsername(username);
+    const usernameError = validateUsername(norm);
+    if (usernameError) return res.status(400).json({ error: usernameError });
+    const available = await isUsernameAvailable(norm, req.userId);
+    if (!available) return res.status(409).json({ error: "Username already taken." });
+    data.username = norm;
+  }
+
   // status and bio are free-text — store empty string as null for cleanliness
   if (status !== undefined) data.status = status?.trim() || null;
   if (bio !== undefined) data.bio = bio?.trim() || null;
@@ -155,6 +176,7 @@ router.patch("/me", async (req, res) => {
       select: {
         id: true,
         name: true,
+        username: true,
         email: true,
         avatar_url: true,
       },

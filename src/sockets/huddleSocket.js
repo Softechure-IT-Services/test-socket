@@ -167,7 +167,12 @@
 
 // sockets/connection.huddle.js
 
+import prisma from "../config/prisma.js";
+
 const users = new Map();
+// Track participants so we can end a huddle when empty.
+const roomParticipants = new Map(); // roomId -> Set<socketId>
+const roomToChannel = new Map(); // roomId -> channelId (number)
 
 export default function registerConnectionHuddleSockets(io, socket) {
   console.log(`👤 User connected: ${socket.id}`);
@@ -175,6 +180,7 @@ export default function registerConnectionHuddleSockets(io, socket) {
   // Initialize user
   users.set(socket.id, {
     id: socket.id,
+    userId: socket.user?.id ?? null,
     username: null,
     inCall: false,
     room: null,
@@ -240,6 +246,10 @@ export default function registerConnectionHuddleSockets(io, socket) {
 
     socket.join(roomId);
 
+    // Track participants
+    if (!roomParticipants.has(roomId)) roomParticipants.set(roomId, new Set());
+    roomParticipants.get(roomId).add(socket.id);
+
     const roomUsers = Array.from(
       io.sockets.adapter.rooms.get(roomId) || []
     )
@@ -257,6 +267,85 @@ export default function registerConnectionHuddleSockets(io, socket) {
     });
 
     broadcastUserList(io);
+  });
+
+  // Channel huddle bootstrap: notify all channel members to join the channel-based room.
+  // The client will open `/huddle?channel_id=<id>` and auto-join `channel-<id>`.
+  socket.on("huddle-started", async ({ channelId, roomId }) => {
+    const cid = Number(channelId);
+    if (!Number.isFinite(cid)) return;
+    // Prefer a stable room id (active session meeting_id) so everyone joins same huddle.
+    let rid = roomId;
+
+    try {
+      // Ensure starter is a member of the channel
+      const membership = await prisma.channel_members.findFirst({
+        where: {
+          channel_id: cid,
+          user_id: Number(socket.user?.id),
+        },
+        select: { user_id: true },
+      });
+      if (!membership) {
+        socket.emit("huddle-error", { error: "Not allowed to start huddle for this channel" });
+        return;
+      }
+
+      // Create or reuse active session; use its meeting_id as room id.
+      let session = await prisma.huddleSession.findFirst({
+        where: { channel_id: cid, ended_at: null },
+        orderBy: { started_at: "desc" },
+      });
+      if (!session) {
+        const meetingId = `channel-${cid}-${Date.now()}`;
+        session = await prisma.huddleSession.create({
+          data: {
+            meeting_id: meetingId,
+            channel_id: cid,
+            started_by: Number(socket.user?.id),
+            started_at: new Date(),
+          },
+        });
+      }
+      rid = session.meeting_id;
+
+      // Auto-enter starter immediately.
+      const user = users.get(socket.id);
+      if (user) {
+        user.room = rid;
+        user.inCall = true;
+      }
+      socket.join(rid);
+      if (!roomParticipants.has(rid)) roomParticipants.set(rid, new Set());
+      roomParticipants.get(rid).add(socket.id);
+      roomToChannel.set(rid, cid);
+
+      const members = await prisma.channel_members.findMany({
+        where: { channel_id: cid },
+        select: { user_id: true },
+      });
+      const userIds = members.map((m) => m.user_id).filter((x) => x != null);
+
+      const payload = {
+        channelId: cid,
+        roomId: rid,
+        startedBy: Number(socket.user?.id),
+      };
+
+      // Ack to starter (already in room now)
+      socket.emit("huddleJoined", payload);
+
+      // Notify everyone in the channel room (for online users already viewing the channel)
+      io.to(`channel_${cid}`).emit("huddleStarted", payload);
+      // Also notify via personal rooms so offline-from-channel-view users can still get it
+      userIds.forEach((uid) => {
+        io.to(`user_${uid}`).emit("huddleStarted", payload);
+      });
+      broadcastUserList(io);
+    } catch (err) {
+      console.error("huddle-started error:", err.message);
+      socket.emit("huddle-error", { error: "Failed to start huddle" });
+    }
   });
 
   // WebRTC signaling
@@ -318,6 +407,26 @@ export default function registerConnectionHuddleSockets(io, socket) {
     }
 
     socket.leave(roomId);
+    const set = roomParticipants.get(roomId);
+    if (set) {
+      set.delete(socket.id);
+      if (set.size === 0) {
+        roomParticipants.delete(roomId);
+        const cid = roomToChannel.get(roomId);
+        if (cid) {
+          prisma.huddleSession
+            .updateMany({
+              where: { channel_id: cid, meeting_id: roomId, ended_at: null },
+              data: { ended_at: new Date() },
+            })
+            .then(() => {
+              io.to(`channel_${cid}`).emit("huddleEnded", { channelId: cid, roomId });
+            })
+            .catch((err) => console.error("huddleEnded persist error:", err.message));
+        }
+        roomToChannel.delete(roomId);
+      }
+    }
     socket.to(roomId).emit("user-left", socket.id);
     broadcastUserList(io);
   });
@@ -329,6 +438,27 @@ export default function registerConnectionHuddleSockets(io, socket) {
     const user = users.get(socket.id);
     if (user?.room) {
       socket.to(user.room).emit("user-left", socket.id);
+      const roomId = user.room;
+      const set = roomParticipants.get(roomId);
+      if (set) {
+        set.delete(socket.id);
+        if (set.size === 0) {
+          roomParticipants.delete(roomId);
+          const cid = roomToChannel.get(roomId);
+          if (cid) {
+            prisma.huddleSession
+              .updateMany({
+                where: { channel_id: cid, meeting_id: roomId, ended_at: null },
+                data: { ended_at: new Date() },
+              })
+              .then(() => {
+                io.to(`channel_${cid}`).emit("huddleEnded", { channelId: cid, roomId });
+              })
+              .catch((err) => console.error("huddleEnded persist error:", err.message));
+          }
+          roomToChannel.delete(roomId);
+        }
+      }
     }
 
     users.delete(socket.id);

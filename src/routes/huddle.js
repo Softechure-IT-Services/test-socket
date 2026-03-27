@@ -109,6 +109,7 @@
 import express from "express";
 import { PrismaClient } from "@prisma/client";
 import authenticateToken from "../middleware/auth.js";
+import { io } from "../sockets/index.js";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -126,11 +127,12 @@ router.get("/", authenticateToken, async (req, res) => {
   }
 
   try {
-    const user = await prisma.user.findUnique({
+    const user = await prisma.users.findUnique({
       where: { id: Number(user_id) },
       select: {
         id: true,
         name: true,
+        username: true,
         email: true,
         avatar_url: true,
       },
@@ -147,6 +149,96 @@ router.get("/", authenticateToken, async (req, res) => {
     });
   } catch (err) {
     console.error("GET /huddle error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /huddle/channel/:channelId/start
+ * Starts (or returns existing active) huddle for a channel.
+ * Emits a realtime popup event to channel members.
+ */
+router.post("/channel/:channelId/start", authenticateToken, async (req, res) => {
+  const channelId = Number(req.params.channelId);
+  const startedBy = Number(req.user?.id);
+
+  if (!Number.isFinite(channelId)) {
+    return res.status(400).json({ error: "Invalid channel id" });
+  }
+  if (!Number.isFinite(startedBy)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    // Ensure channel exists
+    const channel = await prisma.channels.findUnique({
+      where: { id: channelId },
+      select: { id: true, name: true },
+    });
+    if (!channel) {
+      return res.status(404).json({ error: "Channel not found" });
+    }
+
+    // Ensure starter is a channel member
+    const starterMembership = await prisma.channel_members.findFirst({
+      where: { channel_id: channelId, user_id: startedBy },
+      select: { user_id: true },
+    });
+    if (!starterMembership) {
+      return res.status(403).json({ error: "You are not a member of this channel" });
+    }
+
+    // Slack-like behavior: if an active huddle already exists, reuse it.
+    let session = await prisma.huddleSession.findFirst({
+      where: { channel_id: channelId, ended_at: null },
+      orderBy: { started_at: "desc" },
+    });
+
+    let created = false;
+    if (!session) {
+      const meetingId = `channel-${channelId}-${Date.now()}`;
+      session = await prisma.huddleSession.create({
+        data: {
+          meeting_id: meetingId,
+          channel_id: channelId,
+          started_by: startedBy,
+          started_at: new Date(),
+        },
+      });
+      created = true;
+    }
+
+    // Notify all channel members so UI can show "Join Huddle" popup.
+    const members = await prisma.channel_members.findMany({
+      where: { channel_id: channelId },
+      select: { user_id: true },
+    });
+    const memberIds = members.map((m) => m.user_id).filter((id) => id != null);
+
+    const payload = {
+      channel_id: channelId,
+      channel_name: channel.name,
+      meeting_id: session.meeting_id,
+      started_by: startedBy,
+      created,
+    };
+
+    if (io) {
+      io.to(`channel_${channelId}`).emit("huddleStarted", payload);
+      memberIds.forEach((uid) => {
+        io.to(`user_${uid}`).emit("huddleStarted", payload);
+      });
+    }
+
+    return res.status(created ? 201 : 200).json({
+      success: true,
+      created,
+      session,
+      room_id: session.meeting_id,
+      members: memberIds,
+    });
+  } catch (err) {
+    console.error("POST /huddle/channel/:channelId/start error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -208,6 +300,34 @@ router.patch("/session/:meeting_id/end", authenticateToken, async (req, res) => 
     return res.status(200).json({ message: "Session ended" });
   } catch (err) {
     console.error("PATCH /huddle/session/:meeting_id/end error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /huddle/channel/:channelId/active
+ * Returns active huddle session for channel (if any).
+ */
+router.get("/channel/:channelId/active", authenticateToken, async (req, res) => {
+  const channelId = Number(req.params.channelId);
+  if (!Number.isFinite(channelId)) {
+    return res.status(400).json({ error: "Invalid channel id" });
+  }
+
+  try {
+    const active = await prisma.huddleSession.findFirst({
+      where: { channel_id: channelId, ended_at: null },
+      orderBy: { started_at: "desc" },
+    });
+
+    return res.status(200).json({
+      success: true,
+      active: !!active,
+      session: active ?? null,
+      room_id: active?.meeting_id ?? null,
+    });
+  } catch (err) {
+    console.error("GET /huddle/channel/:channelId/active error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
 });

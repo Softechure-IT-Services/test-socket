@@ -12,12 +12,51 @@ import {
 export const hashToken = (token) => crypto.createHash("sha256").update(token).digest("hex");
 
 /**
+ * Validate and normalise a username string.
+ * Allowed: lowercase letters, digits, underscores, hyphens. Length 3–30.
+ */
+export const normaliseUsername = (raw) => {
+  if (!raw || typeof raw !== "string") return null;
+  return raw.trim().toLowerCase();
+};
+
+const USERNAME_RE = /^[a-z0-9_-]{3,30}$/;
+
+export const validateUsername = (username) => {
+  if (!username) return "Username is required.";
+  if (!USERNAME_RE.test(username))
+    return "Username must be 3–30 characters and contain only letters, numbers, _ or -.";
+  return null; // valid
+};
+
+/**
+ * Check whether a username is available (case-insensitive).
+ * Returns true if available, false if taken.
+ */
+export const isUsernameAvailable = async (username, excludeUserId = null) => {
+  const normalised = normaliseUsername(username);
+  if (!normalised) return false;
+  const where = { username: normalised };
+  if (excludeUserId) where.id = { not: Number(excludeUserId) };
+  const existing = await prisma.users.findFirst({ where, select: { id: true } });
+  return existing === null;
+};
+
+/**
  * Register a new user
  */
-export const registerUser = async ({ external_id, name, email, avatar_url, password }) => {
+export const registerUser = async ({ external_id, name, email, avatar_url, password, username }) => {
   // Check if email already exists
   const existing = await prisma.users.findUnique({ where: { email } });
   if (existing) throw { status: 409, message: "Email already registered" };
+
+  // Validate username
+  const normUsername = normaliseUsername(username);
+  const usernameError = validateUsername(normUsername);
+  if (usernameError) throw { status: 400, message: usernameError };
+
+  const usernameTaken = !(await isUsernameAvailable(normUsername));
+  if (usernameTaken) throw { status: 409, message: "Username already taken" };
 
   // Normalize password so whitespace-only values are rejected
   if (!password || !password.trim()) throw { status: 400, message: "Password is required" };
@@ -30,6 +69,7 @@ export const registerUser = async ({ external_id, name, email, avatar_url, passw
       external_id,
       name,
       email,
+      username: normUsername,
       avatar_url,
       password: hashedPassword,
       is_online: false,
@@ -39,6 +79,7 @@ export const registerUser = async ({ external_id, name, email, avatar_url, passw
       id: true,
       external_id: true,
       name: true,
+      username: true,
       email: true,
       avatar_url: true,
       is_online: true,

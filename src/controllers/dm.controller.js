@@ -1,11 +1,7 @@
 import prisma from "../config/prisma.js";
 import { io } from "../sockets/index.js";
 
-/**
- * Create or get existing DM between two users
- */
 export const createOrGetDM = async (req, res) => {
-  // TEMP: hardcoded until auth middleware is enabled
   const userId = req.user.id;
   const otherUserId = Number(req.params.otherUserId);
 
@@ -14,161 +10,68 @@ export const createOrGetDM = async (req, res) => {
   }
 
   try {
-    // 1️⃣ Check if DM already exists
-//   const existingDM = await prisma.channels.findFirst({
-//   where: {
-//     is_dm: true,
-//     channel_members: {
-//       some: { user_id: userId },
-//     },
-//     AND: {
-//       channel_members: {
-//         some: { user_id: otherUserId },
-//       },
-//     },
-//     // Ensure there are only 2 members
-//     channel_members: {
-//       length: 2,
-//     },
-//   },
-//   select: { id: true },
-// });
-
-// const existingDMs = await prisma.channels.findMany({
-//   where: { is_dm: true },
-//   include: { channel_members: true },
-// });
-const existingDM = await prisma.channels.findFirst({
-  where: {
-    is_dm: true,
-    name: `dm_${Math.min(userId, otherUserId)}_${Math.max(userId, otherUserId)}`,
-  },
-  select: { id: true },
-});
-
-// const existingDM = existingDMs.find((c) => {
-//   const memberIds = c.channel_members.map((m) => m.user_id).sort();
-//   return memberIds.length === 2 && memberIds[0] === Math.min(userId, otherUserId) && memberIds[1] === Math.max(userId, otherUserId);
-// });
-
+    // 1. Check if DM already exists
+    const existingDM = await prisma.channels.findFirst({
+      where: {
+        is_dm: true,
+        channel_members: {
+          every: {
+            user_id: { in: [userId, otherUserId] },
+          },
+        },
+      },
+      select: { id: true },
+    });
 
     if (existingDM) {
       return res.json({ dm_id: existingDM.id });
     }
 
-    // 2️⃣ Create DM + members in transaction
-    const dmChannel = await prisma.$transaction(async (tx) => {
-      return tx.channels.create({
-        data: {
-          name: `dm_${Math.min(userId, otherUserId)}_${Math.max(userId, otherUserId)}`,
-          is_private: true,
-          is_dm: true,
-          created_by: userId,
-          channel_members: {
-            create: [
-              { user_id: userId },
-              { user_id: otherUserId },
-            ],
-          },
+    // 2. Create DM
+    const dmChannel = await prisma.channels.create({
+      data: {
+        name: `DM_${userId}_${otherUserId}_${Date.now()}`,
+        is_private: true,
+        is_dm: true,
+        created_by: userId,
+        channel_members: {
+          create: [{ user_id: userId }, { user_id: otherUserId }],
         },
-select: { id: true, name: true, is_private: true },
-      });
+      },
+      select: { id: true },
     });
-const creator = await prisma.users.findUnique({
-  where: { id: userId },
-  select: {
-    id: true,
-    name: true,
-    avatar_url: true,
-    is_online: true,
-    last_seen: true,
-  },
-});
 
-const other = await prisma.users.findUnique({
-  where: { id: otherUserId },
-  select: {
-    id: true,
-    name: true,
-    avatar_url: true,
-    is_online: true,
-    last_seen: true,
-  },
-});
-
-// Emit full DM info
-// io.emit("dmCreated", {
-//   channel_id: dmChannel.id,
-//   members: [creator, other],
-// });
-
-// After creating DM
-[creator.id, other.id].forEach((uid) => {
-  io.to(`user_${uid}`).emit("dmCreated", {
-    channel_id: dmChannel.id,
-    members: [
-      {
-        id: creator.id,
-        name: creator.name,
-        avatar_url: creator.avatar_url,
-        is_online: !!creator.is_online,
-        last_seen: creator.last_seen,
-      },
-      {
-        id: other.id,
-        name: other.name,
-        avatar_url: other.avatar_url,
-        is_online: !!other.is_online,
-        last_seen: other.last_seen,
-      },
-    ],
-  });
-});
-
-
-
+    if (io) {
+      io.to(`user_${userId}`).emit("dmCreated", {});
+      io.to(`user_${otherUserId}`).emit("dmCreated", {});
+    }
 
     res.json({ dm_id: dmChannel.id });
   } catch (err) {
-    console.error("DM creation error:", err);
-    res.status(500).json({ error: err.message });
+    console.error("createOrGetDM error:", err);
+    res.status(500).json({ error: "Failed to create/get DM" });
   }
 };
 
-/**
- * List all DMs for logged-in user
- */
 export const listMyDMs = async (req, res) => {
   const userId = req.user.id;
-
-  if (!userId) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
 
   try {
     const dms = await prisma.channels.findMany({
       where: {
         is_dm: true,
-        channel_members: {
-          some: {
-            user_id: userId,
-          },
-        },
+        channel_members: { some: { user_id: userId } },
       },
-      orderBy: { id: "desc" },
-      select: {
-        id: true,
-        is_private: true,
-        is_dm: true,
+      orderBy: { updated_at: "desc" },
+      include: {
         channel_members: {
-          where: {
-            user_id: { not: userId },
-          },
-          select: {
+          where: { user_id: { not: userId } },
+          include: {
             users: {
               select: {
                 id: true,
                 name: true,
+                username:true,
                 avatar_url: true,
                 is_online: true,
                 last_seen: true,
@@ -179,23 +82,24 @@ export const listMyDMs = async (req, res) => {
       },
     });
 
-    const result = dms.map((dm) => {
+    const formatted = dms.map((dm) => {
       const otherUser = dm.channel_members[0]?.users;
       return {
         id: dm.id,
         other_user_id: otherUser?.id,
         name: otherUser?.name,
+        username: otherUser?.username,
         avatar_url: otherUser?.avatar_url,
+        is_online: !!otherUser?.is_online,
+        last_seen: otherUser?.last_seen,
         is_private: dm.is_private,
         is_dm: dm.is_dm,
-        is_online: otherUser?.is_online ?? false,
-        last_seen: otherUser?.last_seen ?? null,
       };
     });
 
-    res.json(result);
+    res.json(formatted);
   } catch (err) {
-    console.error("DM fetch error:", err);
-    res.status(500).json({ error: err.message });
+    console.error("listMyDMs error:", err);
+    res.status(500).json({ error: "Failed to fetch DMs" });
   }
 };

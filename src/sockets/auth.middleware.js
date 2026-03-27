@@ -13,12 +13,17 @@ export default function socketAuthMiddleware(socket, next) {
       id: user.id,
       email: user.email,
       name: user.name,
+      username: user.username,
       avatar_url: user.avatar_url,
     };
 
     next();
   } catch (err) {
-    console.error("❌ Socket auth failed:", err.message);
+    if (err.message === "jwt expired") {
+      console.warn("⚠️ Socket auth failed: Token expired");
+    } else {
+      console.error("❌ Socket auth failed:", err.message);
+    }
     next(new Error("Unauthorized"));
   }
 }

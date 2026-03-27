@@ -10,6 +10,7 @@ export const getAllUsers = async () => {
       id: true,
       external_id: true,
       name: true,
+      username: true,
       email: true,
       avatar_url: true,
       is_online: true,
@@ -31,6 +32,7 @@ export const getUserById = async (userId) => {
       id: true,
       external_id: true,
       name: true,
+      username: true,
       email: true,
       avatar_url: true,
       is_online: true,
@@ -55,6 +57,7 @@ export const searchUsers = async (q, exclude) => {
     select: {
       id: true,
       name: true,
+      username: true,
       avatar_url: true,
       is_online: true,
     },
@@ -91,22 +94,46 @@ export const searchUsers = async (q, exclude) => {
 /**
  * Update user
  */
-export const updateUser = async (userId, { name, email, avatar_url }) => {
+export const updateUser = async (userId, { name, email, avatar_url, username }) => {
+  const data = {};
+  if (name !== undefined) data.name = name;
+  if (email !== undefined) data.email = email;
+  if (avatar_url !== undefined) data.avatar_url = avatar_url;
+  if (username !== undefined) {
+    const { normaliseUsername, validateUsername, isUsernameAvailable } = await import("./auth.controller.js");
+    const norm = normaliseUsername(username);
+    const err = validateUsername(norm);
+    if (err) throw { status: 400, message: err };
+    const available = await isUsernameAvailable(norm, userId);
+    if (!available) throw { status: 409, message: "Username already taken" };
+    data.username = norm;
+  }
+  data.updated_at = new Date();
+
   return prisma.users.update({
     where: { id: Number(userId) },
-    data: {
-      name,
-      email,
-      avatar_url,
-      updated_at: new Date(),
-    },
+    data,
     select: {
       id: true,
       name: true,
+      username: true,
       email: true,
       avatar_url: true,
     },
   });
+};
+
+/**
+ * Check username availability
+ * Returns { available: boolean }
+ */
+export const checkUsernameAvailable = async (username, excludeUserId = null) => {
+  const { isUsernameAvailable, normaliseUsername, validateUsername } = await import("./auth.controller.js");
+  const norm = normaliseUsername(username);
+  const error = validateUsername(norm);
+  if (error) return { available: false, error };
+  const available = await isUsernameAvailable(norm, excludeUserId);
+  return { available };
 };
 
 /**

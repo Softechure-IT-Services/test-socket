@@ -48,6 +48,7 @@ model channels {
   channel_left    channel_left[]
   users           users?            @relation(fields: [created_by], references: [id], onUpdate: Restrict, map: "channels_ibfk_1")
   threads         threads[]
+  messages        messages[]
 
   @@index([created_by], map: "created_by")
 }
@@ -69,6 +70,7 @@ model messages {
   // Relation for messages that ARE a thread's parent
   thread_as_parent threads[] @relation("ThreadParent")
   users            users     @relation(fields: [sender_id], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "messages_ibfk_2")
+  channel          channels? @relation(fields: [channel_id], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "messages_ibfk_1")
   is_forwarded     Boolean   @default(false)
   forwarded_from   String?
   is_system        Boolean   @default(false)
@@ -99,7 +101,7 @@ model threads {
   channel_id        Int
   created_at        DateTime? @default(now()) @db.DateTime(0)
 
-  channels       channels   @relation(fields: [channel_id], references: [id])
+  channel        channels   @relation(fields: [channel_id], references: [id])
   // Cascade: deleting the parent message deletes this thread row,
   // which then cascade-deletes all reply messages via fk_thread above.
   parent_message messages   @relation("ThreadParent", fields: [parent_message_id], references: [id], onDelete: Cascade)
@@ -112,6 +114,7 @@ model users {
   id              Int               @id @default(autoincrement())
   external_id     String?           @unique(map: "external_id") @db.VarChar(255)
   name            String            @db.VarChar(255)
+  username        String            @unique @default("") @db.VarChar(50)
   email           String            @unique(map: "email") @db.VarChar(255)
   avatar_url      String?           @db.Text
   is_online       Boolean?          @default(false)

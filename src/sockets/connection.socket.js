@@ -21,7 +21,7 @@ io.use(async (socket, next) => {
     // const user = await verifyOpaqueToken(token);
     const user = verifyAccessToken(token);
 
-    socket.user = { id: user.id, email: user.email, name: user.name, avatar_url: user.avatar_url };
+    socket.user = { id: user.id, email: user.email, name: user.name, username: user.username, avatar_url: user.avatar_url };
 
     console.log("✅ Socket authenticated:", socket.user.id);
     next();
@@ -76,7 +76,7 @@ io.on("connection", (socket) => {
             content: row.content,
             files: JSON.parse(row.files || "[]"),
             sender_id: row.sender_id,
-            sender_name: socket.user.name,
+            sender_name: socket.user.username,
             avatar_url: socket.user.avatar_url,
             created_at: row.created_at,   // ✅ FROM DB
             updated_at: row.updated_at,   // ✅ FROM DB

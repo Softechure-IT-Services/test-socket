@@ -1,617 +1,219 @@
 import prisma from "../config/prisma.js";
-import supabase from "../utils/supabase.js";
+import { getPreviewText } from "../utils/format.js";
 
+/**
+ * Register handlers for messaging-related socket events.
+ * 
+ * @param {import("socket.io").Server} io 
+ * @param {import("socket.io").Socket} socket 
+ */
 export default function registerMessageSockets(io, socket) {
-
-  // ================= SEND =================
-//   socket.on("sendMessage", async ({ content, channel_id, files }) => {
-//     try {
-//       const userId = socket.user.id;
-
-//       // Check if the channel is private and user is still a member
-//       const channel = await prisma.channels.findUnique({
-//         where: { id: channel_id },
-//         select: { is_private: true, is_dm: true, name: true },
-//       });
-
-// const isMember = await prisma.channel_members.findUnique({
-//   where: {
-//     channel_id_user_id: {
-//       channel_id: channel_id,
-//       user_id: userId,
-//     },
-//   },
-// });
-
-// if (!isMember) {
-//   socket.emit("messageSendError", {
-//     channel_id: channel_id,
-//     error: "You are no longer a member of this channel",
-//   });
-//   return;
-// }
-
-// socket.on("sendMessage", async ({ content, channel_id, files }) => {
-
+  // ─── Send Message ────────────────────────────────────────────────────────────
   socket.on("sendMessage", async ({ content, channel_id, files }) => {
-  try {
-    const userId = socket.user.id;
-
-    const channel = await prisma.channels.findUnique({
-      where: { id: channel_id },
-      select: { is_private: true, is_dm: true, name: true },
-    });
-
-    if (!channel) return;
-
-    // ── Membership check — mirrors the same logic as GET /:id ──────────────
-    // Public channels: a user is a member unless they've explicitly left.
-    // Private / DM channels: must have an explicit channel_members row.
-    let canSend = false;
-
-    if (channel.is_private || channel.is_dm) {
-      const membership = await prisma.channel_members.findUnique({
-        where: { channel_id_user_id: { channel_id: channel_id, user_id: userId } },
-      });
-      canSend = !!membership;
-    } else {
-      const hasLeft = await prisma.channel_left.findUnique({
-        where: { channel_id_user_id: { channel_id: channel_id, user_id: userId } },
-      });
-      canSend = !hasLeft;
-    }
-
-    if (!canSend) {
-      socket.emit("messageSendError", {
-        channel_id,
-        error: "You are no longer a member of this channel",
-      });
-      return;
-    }
-
-    // ... rest unchanged
-
-      if (!channel_id || (!content && (!files || !files.length))) return;
-
+    try {
       const message = await prisma.messages.create({
         data: {
-          channel_id,
-          sender_id: userId,
           content,
-          files: JSON.stringify(files || []),
+          channel_id,
+          sender_id: socket.user.id,
+          files: files ? JSON.stringify(files) : null,
+          reactions: "[]",
         },
         include: {
-          users: true,
+          users: {
+            select: {
+              id: true,
+              name: true,
+              username: true,
+              avatar_url: true,
+            },
+          },
         },
       });
 
-      // Prefer avatar_url from the DB row (always current) over socket.user which
-      // is a snapshot from connection time and goes stale after profile updates.
-      const freshAvatarUrl = message.users?.avatar_url ?? socket.user.avatar_url ?? null;
-      const freshName      = message.users?.name      ?? socket.user.name;
-
-      // Also keep socket.user in sync so future messages in this session are correct
-      // without waiting for a reconnect.
-      socket.user.avatar_url = freshAvatarUrl;
-      socket.user.name       = freshName;
-
-      const payload = {
-        id: message.id,
-        channel_id: message.channel_id,
-        content: message.content,
-        files: JSON.parse(message.files || "[]"),
-        sender_id: message.sender_id,
-        sender_name: freshName,
-        avatar_url: freshAvatarUrl,
-        created_at: message.created_at,
-        updated_at: message.updated_at,
-        is_edited: false,
+      const broadcastMsg = {
+        ...message,
+        sender_name: message.users.username,
+        avatar_url: message.users.avatar_url,
       };
 
-      // Broadcast to everyone in the channel room (the active viewer)
-      io.to(`channel_${channel_id}`).emit("receiveMessage", payload);
+      io.to(`channel_${channel_id}`).emit("receiveMessage", broadcastMsg);
+      socket.emit("messageAck", broadcastMsg);
 
-      // Also ACK to the sender
-      socket.emit("messageAck", payload);
-
-      // ── Notify ALL channel members via their personal user rooms ──────────────
-      // This ensures sidebar indicators work even when the user isn't in the
-      // channel socket room (e.g. they navigated away and ChannelChat left the room).
-      await _notifyChannelMembers(io, channel_id, payload, channel);
-
-      // ── Notify @mentioned users with a dedicated event ────────────────────────
-      // Fires "newMentionNotification" to every user whose ID appears in a
-      // <span data-mention data-user-id="X"> node inside the message HTML.
-      if (content) {
-        await _notifyMentionedUsers(io, channel_id, payload, channel);
-      }
-
-    } catch (err) {
-      console.error("sendMessage error:", err);
-    }
-  });
-
-  // ================= EDIT =================
-  // Works for both channel messages (have channel_id on the row) and
-  // thread replies (channel_id is null — resolved via the parent thread).
-  socket.on("editMessage", async ({ messageId, content }) => {
-    if (!messageId || !content) return;
-    const msgId = Number(messageId);
-    try {
-      const msg = await prisma.messages.findUnique({
-        where: { id: msgId },
-        select: { id: true, sender_id: true, channel_id: true, thread_parent_id: true },
-      });
-
-      if (!msg || String(msg.sender_id) !== String(socket.user.id)) return;
-
-      // Resolve channel_id for thread replies
-      let resolvedChannelId = msg.channel_id;
-      let isThreadReply = false;
-
-      if (!resolvedChannelId && msg.thread_parent_id) {
-        const thread = await prisma.threads.findUnique({
-          where: { id: msg.thread_parent_id },
-          select: { channel_id: true },
-        });
-        resolvedChannelId = thread?.channel_id ?? null;
-        isThreadReply = true;
-      }
-
-      if (!resolvedChannelId) return;
-
-      const updated = await prisma.messages.update({
-        where: { id: msgId },
-        data: { content, is_edited: true },
-      });
-
-      io.to(`channel_${resolvedChannelId}`).emit("messageEdited", {
-        id: msgId,
-        content,
-        channel_id: resolvedChannelId,
-        updated_at: updated.updated_at,
-        is_edited: true,
-        is_thread_reply: isThreadReply,
-        thread_parent_id: msg.thread_parent_id ?? null,
-      });
-    } catch (err) {
-      console.error("editMessage error:", err);
-    }
-  });
-
-  // ================= DELETE =================
-  // Works for channel messages and thread replies (resolves channel_id via thread).
-  socket.on("deleteMessage", async ({ id }) => {
-    if (!id) return;
-
-    const msgId = Number(id);
-    if (isNaN(msgId)) return;
-
-    try {
-      const msg = await prisma.messages.findUnique({
-        where: { id: msgId },
-        select: { id: true, sender_id: true, channel_id: true, thread_parent_id: true, files: true },
-      });
-
-      if (!msg || String(msg.sender_id) !== String(socket.user.id)) return;
-
-      // Resolve channel_id for thread replies
-      let resolvedChannelId = msg.channel_id;
-      let isThreadReply = false;
-
-      if (!resolvedChannelId && msg.thread_parent_id) {
-        const thread = await prisma.threads.findUnique({
-          where: { id: msg.thread_parent_id },
-          select: { channel_id: true },
-        });
-        resolvedChannelId = thread?.channel_id ?? null;
-        isThreadReply = true;
-      }
-
-      if (!resolvedChannelId) return;
-
-      let files = [];
+      // Distribute push notification / unread count events
       try {
-        files = JSON.parse(msg.files || "[]");
-      } catch {
-        files = [];
-      }
+        const channelInfo = await prisma.channels.findUnique({ where: { id: channel_id }, select: { name: true, is_dm: true }});
+        const members = await prisma.channel_members.findMany({ where: { channel_id }, select: { user_id: true }});
+        
+        const previewText = getPreviewText(content, files);
 
-      if (Array.isArray(files) && files.length) {
-        const paths = files.map((f) => f.path).filter(Boolean);
-        if (paths.length) {
-          await supabase.storage.from("all files").remove(paths);
-        }
-      }
-
-      // If this is a parent message (not a reply), delete its thread row first.
-      // The fk_thread FK cascades that deletion to all reply messages automatically.
-      // We also do it explicitly here as a safety net for pre-migration environments.
-      if (!isThreadReply) {
-        const ownThread = await prisma.threads.findFirst({
-          where: { parent_message_id: msgId },
-          select: { id: true },
+        members.forEach((m) => {
+          io.to(`user_${m.user_id}`).emit("newMessageNotification", {
+            channel_id: channel_id,
+            message_id: message.id,
+            sender_id: socket.user.id,
+            sender_name: broadcastMsg.sender_name,
+            avatar_url: broadcastMsg.avatar_url,
+            preview: previewText,
+            channel_name: channelInfo?.name,
+            is_dm: channelInfo?.is_dm === true,
+            created_at: new Date().toISOString()
+          });
         });
-        if (ownThread) {
-          await prisma.threads.delete({ where: { id: ownThread.id } });
-          // Tell clients to remove this thread from the Threads page
-          io.to(`channel_${resolvedChannelId}`).emit("threadDeleted", {
-            parent_message_id: msgId,
-            thread_id: ownThread.id,
+
+        // Parse Mentions
+        const mentionMatches = content.match(/@(\w+)/g);
+        if (mentionMatches && mentionMatches.length > 0) {
+          const mentionedUsernames = mentionMatches.map(m => m.slice(1));
+          
+          const mentionedUsers = await prisma.users.findMany({
+            where: { username: { in: mentionedUsernames } },
+            select: { id: true }
+          });
+
+          // Filter out the sender and ensure they are actually in the channel
+          const validMentions = mentionedUsers.filter(u => 
+            String(u.id) !== String(socket.user.id) && 
+            members.some(m => String(m.user_id) === String(u.id))
+          );
+
+          validMentions.forEach(u => {
+            io.to(`user_${u.id}`).emit("newMentionNotification", {
+              channel_id: channel_id,
+              sender_name: broadcastMsg.sender_name,
+              channel_name: channelInfo?.name,
+              is_dm: channelInfo?.is_dm === true,
+              preview: `"${content.substring(0, 50)}${content.length > 50 ? '...' : ''}"`,
+              avatar_url: broadcastMsg.avatar_url,
+              created_at: new Date().toISOString()
+            });
           });
         }
+
+      } catch (err) {
+        console.error("Failed to emit newMessageNotification:", err.message);
+      }
+    } catch (err) {
+      console.error("❌ sendMessage error:", err.message);
+      socket.emit("messageSendError", { channel_id, error: err.message });
+    }
+  });
+
+  // ─── Edit Message ────────────────────────────────────────────────────────────
+  socket.on("editMessage", async ({ messageId, content, channel_id }) => {
+    try {
+      const updated = await prisma.messages.update({
+        where: { id: Number(messageId) },
+        data: {
+          content,
+          is_edited: true,
+          updated_at: new Date(),
+        },
+      });
+
+      io.to(`channel_${channel_id}`).emit("messageEdited", updated);
+    } catch (err) {
+      console.error("❌ editMessage error:", err.message);
+    }
+  });
+
+  // ─── Delete Message ──────────────────────────────────────────────────────────
+  socket.on("deleteMessage", async ({ id }) => {
+    try {
+      const record = await prisma.messages.findUnique({
+        where: { id: Number(id) },
+        select: { channel_id: true },
+      });
+
+      if (!record) return;
+
+      await prisma.messages.delete({ where: { id: Number(id) } });
+
+      io.to(`channel_${record.channel_id}`).emit("messageDeleted", { id });
+    } catch (err) {
+      console.error("❌ deleteMessage error:", err.message);
+    }
+  });
+
+  // ─── Reactions ───────────────────────────────────────────────────────────────
+  socket.on("reactMessage", async ({ messageId, emoji }) => {
+    try {
+      const msg = await prisma.messages.findUnique({
+        where: { id: Number(messageId) },
+        select: { reactions: true, channel_id: true },
+      });
+
+      if (!msg) return;
+
+      let reactions = [];
+      try {
+        reactions = msg.reactions ? JSON.parse(msg.reactions) : [];
+      } catch (err) {
+        reactions = [];
       }
 
-      await prisma.messages.delete({ where: { id: msgId } });
+      const existingIndex = reactions.findIndex((r) => r.emoji === emoji);
+      const userId = socket.user.id;
 
-      io.to(`channel_${resolvedChannelId}`).emit("messageDeleted", {
-        id: msgId,
-        is_thread_reply: isThreadReply,
-        thread_parent_id: msg.thread_parent_id ?? null,
-      });
-    } catch (err) {
-      console.error("deleteMessage error:", err);
-    }
-  });
+      if (existingIndex !== -1) {
+        const reaction = reactions[existingIndex];
+        const userIndex = reaction.users.findIndex((u) => u.id === userId);
 
-  // ================= PIN/UNPIN =================
-  // Resolves channel_id for thread replies the same way as edit/delete.
-  async function _resolveChannelIdForMessage(msgId) {
-    const msg = await prisma.messages.findUnique({
-      where: { id: msgId },
-      select: { channel_id: true, thread_parent_id: true },
-    });
-    if (!msg) return { resolvedChannelId: null, isThreadReply: false, thread_parent_id: null };
-
-    let resolvedChannelId = msg.channel_id;
-    let isThreadReply = false;
-
-    if (!resolvedChannelId && msg.thread_parent_id) {
-      const thread = await prisma.threads.findUnique({
-        where: { id: msg.thread_parent_id },
-        select: { channel_id: true },
-      });
-      resolvedChannelId = thread?.channel_id ?? null;
-      isThreadReply = true;
-    }
-    return { resolvedChannelId, isThreadReply, thread_parent_id: msg.thread_parent_id ?? null };
-  }
-
-  socket.on("pinMessage", async ({ messageId }) => {
-    if (!messageId) return;
-    const msgId = Number(messageId);
-
-    try {
-      const { resolvedChannelId, isThreadReply, thread_parent_id } =
-        await _resolveChannelIdForMessage(msgId);
-      if (!resolvedChannelId) return;
-
-      const updated = await prisma.messages.update({
-        where: { id: msgId },
-        data: { pinned: true },
-      });
-
-      io.to(`channel_${resolvedChannelId}`).emit("messagePinned", {
-        messageId: msgId,
-        pinned: updated.pinned,
-        is_thread_reply: isThreadReply,
-        thread_parent_id,
-      });
-    } catch (err) {
-      console.error("pinMessage error:", err);
-    }
-  });
-
-  socket.on("unpinMessage", async ({ messageId }) => {
-    if (!messageId) return;
-    const msgId = Number(messageId);
-
-    try {
-      const { resolvedChannelId, isThreadReply, thread_parent_id } =
-        await _resolveChannelIdForMessage(msgId);
-      if (!resolvedChannelId) return;
-
-      await prisma.messages.update({
-        where: { id: msgId },
-        data: { pinned: false },
-      });
-
-      io.to(`channel_${resolvedChannelId}`).emit("messageUnpinned", {
-        messageId: msgId,
-        pinned: false,
-        is_thread_reply: isThreadReply,
-        thread_parent_id,
-      });
-    } catch (err) {
-      console.error("unpinMessage error:", err);
-    }
-  });
-
-  // ================= REACTIONS =================
-  // socket.on("reactMessage", async ({ messageId, emoji }) => {
-  //   try {
-  //     if (!messageId || !emoji) return;
-
-  //     const msgId = Number(messageId);
-
-  //     const msg = await prisma.messages.findUnique({
-  //       where: { id: msgId },
-  //       select: {
-  //         id: true,
-  //         channel_id: true,
-  //         thread_parent_id: true,   
-  //         reactions: true,
-  //       },
-  //     });
-
-  //     if (!msg) return;
-
-  //     const channel_id = msg.channel_id;
-
-  //     let reactions = [];
-  //     try {
-  //       reactions = JSON.parse(msg.reactions || "[]");
-  //     } catch {
-  //       reactions = [];
-  //     }
-
-  //     const userId = String(socket.user.id);
-
-  //     let entry = reactions.find((r) => r.emoji === emoji);
-
-  //     if (entry) {
-  //       const users = Array.isArray(entry.users) ? entry.users : [];
-  //       const hasReacted = users.includes(userId);
-
-  //       if (hasReacted) {
-  //         const newUsers = users.filter((u) => u !== userId);
-  //         if (newUsers.length === 0) {
-  //           reactions = reactions.filter((r) => r.emoji !== emoji);
-  //         } else {
-  //           entry.users = newUsers;
-  //           entry.count = newUsers.length;
-  //         }
-  //       } else {
-  //         const newUsers = [...users, userId];
-  //         entry.users = newUsers;
-  //         entry.count = newUsers.length;
-  //       }
-  //     } else {
-  //       reactions.push({
-  //         emoji,
-  //         count: 1,
-  //         users: [userId],
-  //       });
-  //     }
-
-  //     await prisma.messages.update({
-  //       where: { id: msgId },
-  //       data: {
-  //         reactions: JSON.stringify(reactions),
-  //       },
-  //     });
-
-  //     const userIds = new Set();
-  //     reactions.forEach((r) => r.users.forEach((u) => userIds.add(Number(u))));
-
-  //     const users = await prisma.users.findMany({
-  //       where: { id: { in: [...userIds] } },
-  //       select: { id: true, name: true },
-  //     });
-
-  //     const userMap = Object.fromEntries(users.map((u) => [u.id, u.name]));
-
-  //     const reactionsWithNames = reactions.map((r) => ({
-  //       emoji: r.emoji,
-  //       count: r.count,
-  //       users: r.users.map((uid) => ({
-  //         id: Number(uid),
-  //         name: userMap[Number(uid)] || "Unknown",
-  //       })),
-  //     }));
-
-  //     io.to(`channel_${channel_id}`).emit("reactionUpdated", {
-  //       messageId: msgId,
-  //       reactions: reactionsWithNames,
-  //     });
-  //   } catch (err) {
-  //     console.error("reactMessage error:", err);
-  //   }
-  // });
-socket.on("reactMessage", async ({ messageId, emoji }) => {
-  try {
-    if (!messageId || !emoji) return;
-
-    const msgId = Number(messageId);
-
-    const msg = await prisma.messages.findUnique({
-      where: { id: msgId },
-      select: {
-        id: true,
-        channel_id: true,
-        thread_parent_id: true,
-        reactions: true,
-      },
-    });
-
-    if (!msg) return;
-
-    // Resolve channel_id — thread reply messages have no channel_id of their
-    // own, so walk up to the parent thread row to find it.
-    let channel_id = msg.channel_id;
-
-    if (!channel_id && msg.thread_parent_id) {
-      const thread = await prisma.threads.findUnique({
-        where: { id: msg.thread_parent_id },
-        select: { channel_id: true },
-      });
-      channel_id = thread?.channel_id ?? null;
-    }
-
-    if (!channel_id) return;
-
-    let reactions = [];
-    try {
-      reactions = JSON.parse(msg.reactions || "[]");
-    } catch {
-      reactions = [];
-    }
-
-    const userId = String(socket.user.id);
-    let entry = reactions.find((r) => r.emoji === emoji);
-
-    if (entry) {
-      const users = Array.isArray(entry.users) ? entry.users : [];
-      const hasReacted = users.includes(userId);
-
-      if (hasReacted) {
-        const newUsers = users.filter((u) => u !== userId);
-        if (newUsers.length === 0) {
-          reactions = reactions.filter((r) => r.emoji !== emoji);
+        if (userIndex !== -1) {
+          // Remove reaction
+          reaction.users.splice(userIndex, 1);
+          reaction.count = reaction.users.length;
+          if (reaction.count === 0) reactions.splice(existingIndex, 1);
         } else {
-          entry.users = newUsers;
-          entry.count = newUsers.length;
+          // Add user to existing emoji
+          reaction.users.push({ id: userId, name: socket.user.username });
+          reaction.count = reaction.users.length;
         }
       } else {
-        const newUsers = [...users, userId];
-        entry.users = newUsers;
-        entry.count = newUsers.length;
+        // New emoji
+        reactions.push({
+          emoji,
+          count: 1,
+          users: [{ id: userId, name: socket.user.username }],
+        });
       }
-    } else {
-      reactions.push({
-        emoji,
-        count: 1,
-        users: [userId],
+
+      const updated = await prisma.messages.update({
+        where: { id: Number(messageId) },
+        data: { reactions: JSON.stringify(reactions) },
       });
-    }
 
-    await prisma.messages.update({
-      where: { id: msgId },
-      data: { reactions: JSON.stringify(reactions) },
-    });
-
-    const userIds = new Set();
-    reactions.forEach((r) => r.users.forEach((u) => userIds.add(Number(u))));
-
-    const users = await prisma.users.findMany({
-      where: { id: { in: [...userIds] } },
-      select: { id: true, name: true },
-    });
-
-    const userMap = Object.fromEntries(users.map((u) => [u.id, u.name]));
-
-    const reactionsWithNames = reactions.map((r) => ({
-      emoji: r.emoji,
-      count: r.count,
-      users: r.users.map((uid) => ({
-        id: Number(uid),
-        name: userMap[Number(uid)] || "Unknown",
-      })),
-    }));
-
-    io.to(`channel_${channel_id}`).emit("reactionUpdated", {
-      messageId: msgId,
-      reactions: reactionsWithNames,
-    });
-  } catch (err) {
-    console.error("reactMessage error:", err);
-  }
-});
-}
-
-// ─── Helper: fan out a notification to every member's personal user room ───────
-// We do NOT emit to the sender (they already got messageAck).
-// We do NOT send the full message content in the notification — just enough
-// for the sidebar badge + browser push notification.
-async function _notifyChannelMembers(io, channel_id, payload, channel) {
-  try {
-    // Fetch all members of this channel
-    const members = await prisma.channel_members.findMany({
-      where: { channel_id },
-      select: { user_id: true },
-    });
-
-    // Build the lightweight notification payload
-    const notification = {
-      channel_id: payload.channel_id,
-      message_id: payload.id,
-      sender_id: payload.sender_id,
-      sender_name: payload.sender_name,
-      avatar_url: payload.avatar_url,
-      // Strip HTML tags for the push notification preview
-      preview: _stripHtml(payload.content ?? "").slice(0, 100),
-      channel_name: channel?.name ?? null,
-      is_dm: channel?.is_dm ?? false,
-      created_at: payload.created_at,
-    };
-
-    for (const member of members) {
-      // Skip the sender — they're already aware of the message
-      if (String(member.user_id) === String(payload.sender_id)) continue;
-
-      // Emit to the member's always-present personal room
-      io.to(`user_${member.user_id}`).emit("newMessageNotification", notification);
-    }
-  } catch (err) {
-    console.error("_notifyChannelMembers error:", err);
-  }
-}
-
-function _stripHtml(html) {
-  return html.replace(/<[^>]*>/g, "").replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-    .replace(/&nbsp;/g, " ").trim();
-}
-
-// ─── Helper: extract user IDs from TipTap mention nodes ───────────────────
-// Matches:  <span data-mention data-user-id="42">@Alice</span>
-function _extractMentionedUserIds(html) {
-  const regex = /data-user-id="(\d+)"/g;
-  const ids = new Set();
-  let match;
-  while ((match = regex.exec(html)) !== null) {
-    const n = Number(match[1]);
-    if (!isNaN(n) && n > 0) ids.add(n);
-  }
-  return [...ids];
-}
-
-// ─── Helper: emit newMentionNotification to each @mentioned member ─────────
-async function _notifyMentionedUsers(io, channel_id, payload, channel) {
-  try {
-    const mentionedIds = _extractMentionedUserIds(payload.content ?? "");
-    if (mentionedIds.length === 0) return;
-
-    const preview = _stripHtml(payload.content ?? "").slice(0, 120);
-
-    const notification = {
-      channel_id:   payload.channel_id,
-      channel_name: channel?.name ?? null,
-      is_dm:        channel?.is_dm ?? false,
-      message_id:   payload.id,
-      sender_id:    payload.sender_id,
-      sender_name:  payload.sender_name,
-      avatar_url:   payload.avatar_url,
-      preview,
-      created_at:   payload.created_at,
-    };
-
-    for (const userId of mentionedIds) {
-      // Don't notify the sender if they mentioned themselves
-      if (String(userId) === String(payload.sender_id)) continue;
-
-      // Verify the mentioned user is still a member of the channel
-      const isMember = await prisma.channel_members.findUnique({
-        where: {
-          channel_id_user_id: { channel_id, user_id: userId },
-        },
-        select: { user_id: true },
+      io.to(`channel_${msg.channel_id}`).emit("reactionUpdated", {
+        messageId,
+        reactions,
       });
-      if (!isMember) continue;
-
-      io.to(`user_${userId}`).emit("newMentionNotification", notification);
+    } catch (err) {
+      console.error("❌ reactMessage error:", err.message);
     }
-  } catch (err) {
-    console.error("_notifyMentionedUsers error:", err);
-  }
+  });
+
+  // ─── Pin / Unpin ─────────────────────────────────────────────────────────────
+  socket.on("pinMessage", async ({ messageId, channel_id }) => {
+    try {
+      const updated = await prisma.messages.update({
+        where: { id: Number(messageId) },
+        data: { pinned: true },
+      });
+      io.to(`channel_${channel_id}`).emit("messagePinned", { messageId, pinned: true });
+    } catch (err) {
+      console.error("❌ pinMessage error:", err.message);
+    }
+  });
+
+  socket.on("unpinMessage", async ({ messageId, channel_id }) => {
+    try {
+      const updated = await prisma.messages.update({
+        where: { id: Number(messageId) },
+        data: { pinned: false },
+      });
+      io.to(`channel_${channel_id}`).emit("messageUnpinned", { messageId, pinned: false });
+    } catch (err) {
+      console.error("❌ unpinMessage error:", err.message);
+    }
+  });
 }
