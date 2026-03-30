@@ -145,3 +145,16 @@ model password_reset_tokens {
   @@index([user_id], map: "fk_password_reset_user")
   @@index([token_hash], map: "idx_password_reset_token")
 }
+
+model huddleSession {
+  id         Int       @id @default(autoincrement())
+  meeting_id String    @unique @db.VarChar(255)
+  channel_id Int?
+  started_by Int
+  started_at DateTime  @default(now()) @db.DateTime(0)
+  ended_at   DateTime? @db.DateTime(0)
+
+  @@index([channel_id], map: "idx_huddle_channel")
+  @@index([started_by], map: "idx_huddle_started_by")
+  @@map("huddle_sessions")
+}

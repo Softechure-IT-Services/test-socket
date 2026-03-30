@@ -91,41 +91,48 @@ export function initSocket(server) {
   io.use(socketAuthMiddleware);
 
   io.on("connection", (socket) => {
-    console.log("✅ User Connected:", socket.id, "user:", socket.user.id);
-    socket.join(`user_${socket.user.id}`);
-    socket.emit("auth-success", { user: socket.user });
+    const isGuest = !!socket.user?.guest;
+    console.log("✅ User Connected:", socket.id, "user:", isGuest ? "guest" : socket.user?.id);
 
-    trackUserConnection(socket.user?.id);
+    if (!isGuest && socket.user?.id != null) {
+      socket.join(`user_${socket.user.id}`);
+      socket.emit("auth-success", { user: socket.user });
 
-    socket.on("disconnect", () => {
-      releaseUserConnection(socket.user?.id);
-    });
+      trackUserConnection(socket.user?.id);
 
-    registerChannelSockets(io, socket);
-    registerMessageSockets(io, socket);
+      socket.on("disconnect", () => {
+        releaseUserConnection(socket.user?.id);
+      });
+
+      registerChannelSockets(io, socket);
+      registerMessageSockets(io, socket);
+    }
+
     registerConnectionHuddleSockets(io, socket);
 
-    // ── Keep socket.user fresh after profile updates ──────────────────────
-    // The client emits this right after a successful profile save so that
-    // subsequent messages use the correct name/avatar without a reconnect.
-    socket.on("refreshUserProfile", async () => {
-      try {
-        const fresh = await prisma.users.findUnique({
-          where: { id: socket.user.id },
-          select: { id: true, name: true, username: true, email: true, avatar_url: true },
-        });
-        if (fresh) {
-          socket.user.name       = fresh.name;
-          socket.user.username   = fresh.username;
-          socket.user.avatar_url = fresh.avatar_url;
-          socket.user.email      = fresh.email;
-          // Echo the updated profile back so the client can update its auth context
-          socket.emit("userProfileRefreshed", fresh);
+    if (!isGuest) {
+      // ── Keep socket.user fresh after profile updates ──────────────────────
+      // The client emits this right after a successful profile save so that
+      // subsequent messages use the correct name/avatar without a reconnect.
+      socket.on("refreshUserProfile", async () => {
+        try {
+          const fresh = await prisma.users.findUnique({
+            where: { id: socket.user.id },
+            select: { id: true, name: true, username: true, email: true, avatar_url: true },
+          });
+          if (fresh) {
+            socket.user.name       = fresh.name;
+            socket.user.username   = fresh.username;
+            socket.user.avatar_url = fresh.avatar_url;
+            socket.user.email      = fresh.email;
+            // Echo the updated profile back so the client can update its auth context
+            socket.emit("userProfileRefreshed", fresh);
+          }
+        } catch (err) {
+          console.error("refreshUserProfile error:", err.message);
         }
-      } catch (err) {
-        console.error("refreshUserProfile error:", err.message);
-      }
-    });
+      });
+    }
   });
 
   return io;

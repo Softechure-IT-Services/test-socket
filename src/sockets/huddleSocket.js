@@ -170,14 +170,164 @@
 import prisma from "../config/prisma.js";
 
 const users = new Map();
-// Track participants so we can end a huddle when empty.
 const roomParticipants = new Map(); // roomId -> Set<socketId>
-const roomToChannel = new Map(); // roomId -> channelId (number)
+const roomPendingRequests = new Map(); // roomId -> Map<socketId, pendingUser>
+const roomJoinAuthorizations = new Map(); // roomId -> Set<socketId>
+const roomChatHistory = new Map(); // roomId -> chat messages kept for the active huddle
+const roomToChannel = new Map(); // roomId -> channelId
+
+function ensureSet(map, key) {
+  if (!map.has(key)) map.set(key, new Set());
+  return map.get(key);
+}
+
+function ensurePendingMap(roomId) {
+  if (!roomPendingRequests.has(roomId)) roomPendingRequests.set(roomId, new Map());
+  return roomPendingRequests.get(roomId);
+}
+
+function serializeMember(socketId) {
+  const user = users.get(socketId);
+  return {
+    socketId,
+    userId: user?.userId != null ? String(user.userId) : null,
+    username: user?.username || "Anonymous",
+  };
+}
+
+function getRoomParticipantsSnapshot(roomId) {
+  return Array.from(roomParticipants.get(roomId) || []).map(serializeMember);
+}
+
+function getRoomPendingSnapshot(roomId) {
+  return Array.from(roomPendingRequests.get(roomId)?.values() || []);
+}
+
+function getRoomChatHistory(roomId) {
+  return roomChatHistory.get(roomId) || [];
+}
+
+function hasSameUserActive(roomId, userId, exceptSocketId = null) {
+  if (userId == null) return false;
+
+  return getRoomParticipantsSnapshot(roomId).some((member) => {
+    if (exceptSocketId && member.socketId === exceptSocketId) return false;
+    return member.userId != null && String(member.userId) === String(userId);
+  });
+}
+
+function authorizeRoomJoin(roomId, socketId) {
+  ensureSet(roomJoinAuthorizations, roomId).add(socketId);
+}
+
+function consumeRoomJoinAuthorization(roomId, socketId) {
+  const roomSet = roomJoinAuthorizations.get(roomId);
+  if (!roomSet?.has(socketId)) return false;
+  roomSet.delete(socketId);
+  if (roomSet.size === 0) roomJoinAuthorizations.delete(roomId);
+  return true;
+}
+
+function removePendingRequest(roomId, socketId) {
+  const roomMap = roomPendingRequests.get(roomId);
+  if (!roomMap?.has(socketId)) return false;
+  roomMap.delete(socketId);
+  if (roomMap.size === 0) roomPendingRequests.delete(roomId);
+  return true;
+}
+
+function removePendingRequestsForSocket(socketId) {
+  const affectedRooms = [];
+
+  for (const [roomId, roomMap] of roomPendingRequests.entries()) {
+    if (!roomMap.has(socketId)) continue;
+    roomMap.delete(socketId);
+    if (roomMap.size === 0) roomPendingRequests.delete(roomId);
+    affectedRooms.push(roomId);
+  }
+
+  return affectedRooms;
+}
+
+function clearRoomJoinAuthorizationsForSocket(socketId) {
+  for (const [roomId, roomSet] of roomJoinAuthorizations.entries()) {
+    roomSet.delete(socketId);
+    if (roomSet.size === 0) roomJoinAuthorizations.delete(roomId);
+  }
+}
+
+function emitRoomState(io, roomId) {
+  const participants = getRoomParticipantsSnapshot(roomId);
+  const pending = getRoomPendingSnapshot(roomId);
+  const payload = { roomId, participants, pending };
+
+  io.to(roomId).emit("room-participants-updated", payload);
+  io.to(roomId).emit("room-pending-updated", payload);
+
+  const pendingMap = roomPendingRequests.get(roomId);
+  if (!pendingMap) return;
+
+  pendingMap.forEach((_, requesterSocketId) => {
+    io.to(requesterSocketId).emit("room-participants-updated", payload);
+    io.to(requesterSocketId).emit("room-pending-updated", payload);
+  });
+}
+
+async function markRoomEndedIfEmpty(io, roomId) {
+  const set = roomParticipants.get(roomId);
+  if (set && set.size > 0) return;
+
+  roomParticipants.delete(roomId);
+  roomPendingRequests.delete(roomId);
+  roomJoinAuthorizations.delete(roomId);
+  roomChatHistory.delete(roomId);
+
+  const cid = roomToChannel.get(roomId);
+  if (!cid) return;
+
+  roomToChannel.delete(roomId);
+
+  try {
+    await prisma.huddleSession.updateMany({
+      where: { channel_id: cid, meeting_id: roomId, ended_at: null },
+      data: { ended_at: new Date() },
+    });
+    io.to(`channel_${cid}`).emit("huddleEnded", { channelId: cid, roomId });
+  } catch (err) {
+    console.error("huddleEnded persist error:", err.message);
+  }
+}
+
+function leaveTrackedRoom(io, socket, roomId, options = {}) {
+  if (!roomId) return;
+
+  const { skipLeave = false } = options;
+  const user = users.get(socket.id);
+
+  if (user) {
+    user.inCall = false;
+    if (user.room === roomId) user.room = null;
+  }
+
+  if (!skipLeave) {
+    socket.leave(roomId);
+  }
+
+  const set = roomParticipants.get(roomId);
+  if (set) {
+    set.delete(socket.id);
+    if (set.size === 0) roomParticipants.delete(roomId);
+  }
+
+  socket.to(roomId).emit("user-left", socket.id);
+  emitRoomState(io, roomId);
+  void markRoomEndedIfEmpty(io, roomId);
+  broadcastUserList(io);
+}
 
 export default function registerConnectionHuddleSockets(io, socket) {
   console.log(`👤 User connected: ${socket.id}`);
 
-  // Initialize user
   users.set(socket.id, {
     id: socket.id,
     userId: socket.user?.id ?? null,
@@ -186,7 +336,6 @@ export default function registerConnectionHuddleSockets(io, socket) {
     room: null,
   });
 
-  // Set username
   socket.on("set-username", (username) => {
     const user = users.get(socket.id);
     if (user) {
@@ -195,7 +344,6 @@ export default function registerConnectionHuddleSockets(io, socket) {
     }
   });
 
-  // Update call status
   socket.on("update-call-status", (inCall) => {
     const user = users.get(socket.id);
     if (user) {
@@ -204,7 +352,6 @@ export default function registerConnectionHuddleSockets(io, socket) {
     }
   });
 
-  // Call user
   socket.on("call-user", ({ to, roomId, callerName }) => {
     if (!to || !roomId) return;
     const targetUser = users.get(to);
@@ -219,6 +366,9 @@ export default function registerConnectionHuddleSockets(io, socket) {
       return;
     }
 
+    authorizeRoomJoin(roomId, socket.id);
+    authorizeRoomJoin(roomId, to);
+
     io.to(to).emit("incoming-call", {
       from: socket.id,
       roomId,
@@ -226,59 +376,214 @@ export default function registerConnectionHuddleSockets(io, socket) {
     });
   });
 
-  // Call accepted
   socket.on("call-accepted", ({ to, roomId }) => {
     io.to(to).emit("call-accepted", { roomId });
   });
 
-  // Call rejected
   socket.on("call-rejected", ({ to, reason }) => {
     io.to(to).emit("call-rejected", { reason });
   });
 
-  // Join room
-  socket.on("join-room", (roomId) => {
+  socket.on("huddle-room-preview", ({ roomId } = {}, ack) => {
+    if (!roomId) {
+      ack?.({ roomId: null, participants: [], pending: [], sameUserActive: false, pendingRequest: false });
+      return;
+    }
+
+    ack?.({
+      roomId,
+      participants: getRoomParticipantsSnapshot(roomId),
+      pending: getRoomPendingSnapshot(roomId),
+      sameUserActive: hasSameUserActive(roomId, socket.user?.id, socket.id),
+      pendingRequest: roomPendingRequests.get(roomId)?.has(socket.id) || false,
+    });
+  });
+
+  socket.on("request-room-admission", ({ roomId, username } = {}, ack) => {
+    if (!roomId) {
+      ack?.({ ok: false, error: "Missing room id" });
+      return;
+    }
+
+    const participantCount = roomParticipants.get(roomId)?.size || 0;
+    const sameUserActive = hasSameUserActive(roomId, socket.user?.id, socket.id);
+
+    if (participantCount === 0 || sameUserActive) {
+      authorizeRoomJoin(roomId, socket.id);
+      ack?.({ ok: true, directJoin: true });
+      socket.emit("room-admission-result", { roomId, status: "admitted" });
+      return;
+    }
+
+    const pendingMap = ensurePendingMap(roomId);
+    pendingMap.set(socket.id, {
+      socketId: socket.id,
+      userId: socket.user?.id != null ? String(socket.user.id) : null,
+      username: username || users.get(socket.id)?.username || "Anonymous",
+    });
+
+    emitRoomState(io, roomId);
+    ack?.({ ok: true });
+  });
+
+  socket.on("cancel-room-admission-request", ({ roomId } = {}) => {
+    if (!roomId) return;
+    if (!removePendingRequest(roomId, socket.id)) return;
+    emitRoomState(io, roomId);
+  });
+
+  socket.on("respond-room-admission", ({ roomId, targetSocketId, admit } = {}) => {
+    if (!roomId || !targetSocketId) return;
+
+    const participantSet = roomParticipants.get(roomId);
+    if (!participantSet?.has(socket.id)) return;
+
+    if (!removePendingRequest(roomId, targetSocketId)) return;
+
+    if (admit) {
+      authorizeRoomJoin(roomId, targetSocketId);
+    }
+
+    io.to(targetSocketId).emit("room-admission-result", {
+      roomId,
+      status: admit ? "admitted" : "denied",
+    });
+
+    emitRoomState(io, roomId);
+  });
+
+  socket.on("huddle-chat-message", ({ roomId, text } = {}, ack) => {
+    const messageText = typeof text === "string" ? text.trim() : "";
+    if (!roomId || !messageText) {
+      ack?.({ ok: false, error: "Message cannot be empty" });
+      return;
+    }
+
+    const participantSet = roomParticipants.get(roomId);
+    if (!participantSet?.has(socket.id)) {
+      ack?.({ ok: false, error: "Join the huddle before chatting" });
+      return;
+    }
+
+    const history = getRoomChatHistory(roomId);
+    const message = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      socketId: socket.id,
+      userId: socket.user?.id != null ? String(socket.user.id) : null,
+      username: users.get(socket.id)?.username || "Anonymous",
+      text: messageText,
+      createdAt: new Date().toISOString(),
+    };
+
+    roomChatHistory.set(roomId, [...history, message].slice(-100));
+    io.to(roomId).emit("huddle-chat-message", message);
+    ack?.({ ok: true });
+  });
+
+  socket.on("kick-participant", ({ roomId, targetSocketId } = {}, ack) => {
+    if (!roomId || !targetSocketId) {
+      ack?.({ ok: false, error: "Missing participant or room" });
+      return;
+    }
+
+    const participantSet = roomParticipants.get(roomId);
+    if (!participantSet?.has(socket.id)) {
+      ack?.({ ok: false, error: "Only current participants can remove someone" });
+      return;
+    }
+
+    if (targetSocketId === socket.id) {
+      ack?.({ ok: false, error: "You cannot kick yourself" });
+      return;
+    }
+
+    if (!participantSet.has(targetSocketId)) {
+      ack?.({ ok: false, error: "That user is no longer in the huddle" });
+      return;
+    }
+
+    const byUsername = users.get(socket.id)?.username || "Someone";
+    io.to(targetSocketId).emit("kicked-from-room", { roomId, byUsername });
+
+    const targetSocket = io.sockets.sockets.get(targetSocketId);
+    if (targetSocket) {
+      leaveTrackedRoom(io, targetSocket, roomId);
+    } else {
+      const targetUser = users.get(targetSocketId);
+      if (targetUser) {
+        targetUser.inCall = false;
+        if (targetUser.room === roomId) targetUser.room = null;
+      }
+
+      participantSet.delete(targetSocketId);
+      if (participantSet.size === 0) roomParticipants.delete(roomId);
+      emitRoomState(io, roomId);
+      void markRoomEndedIfEmpty(io, roomId);
+      broadcastUserList(io);
+    }
+
+    ack?.({ ok: true });
+  });
+
+  socket.on("join-room", (payload, ack) => {
+    const roomId = typeof payload === "string" ? payload : payload?.roomId;
+    if (!roomId) {
+      ack?.({ ok: false, error: "Missing room id" });
+      return;
+    }
+
     const user = users.get(socket.id);
+    const alreadyJoined = roomParticipants.get(roomId)?.has(socket.id) || false;
+    const participantCount = roomParticipants.get(roomId)?.size || 0;
+    const sameUserActive = hasSameUserActive(roomId, socket.user?.id, socket.id);
+    const isAuthorized = consumeRoomJoinAuthorization(roomId, socket.id);
+
+    if (!alreadyJoined && participantCount > 0 && !sameUserActive && !isAuthorized) {
+      ack?.({ ok: false, reason: "admission-required" });
+      socket.emit("room-admission-required", { roomId });
+      return;
+    }
+
     if (user) {
       user.room = roomId;
       user.inCall = true;
     }
 
     socket.join(roomId);
+    ensureSet(roomParticipants, roomId).add(socket.id);
+    removePendingRequest(roomId, socket.id);
 
-    // Track participants
-    if (!roomParticipants.has(roomId)) roomParticipants.set(roomId, new Set());
-    roomParticipants.get(roomId).add(socket.id);
-
-    const roomUsers = Array.from(
-      io.sockets.adapter.rooms.get(roomId) || []
-    )
-      .filter((id) => id !== socket.id)
-      .map((id) => ({
-        id,
-        username: users.get(id)?.username || "Anonymous",
+    const roomUsers = getRoomParticipantsSnapshot(roomId)
+      .filter((member) => member.socketId !== socket.id)
+      .map((member) => ({
+        id: member.socketId,
+        username: member.username,
       }));
 
     socket.emit("existing-users", roomUsers);
-
     socket.to(roomId).emit("user-joined", {
       id: socket.id,
       username: user?.username || "Anonymous",
     });
 
+    emitRoomState(io, roomId);
     broadcastUserList(io);
+
+    ack?.({
+      ok: true,
+      participants: getRoomParticipantsSnapshot(roomId),
+      pending: getRoomPendingSnapshot(roomId),
+      chatHistory: getRoomChatHistory(roomId),
+    });
   });
 
-  // Channel huddle bootstrap: notify all channel members to join the channel-based room.
-  // The client will open `/huddle?channel_id=<id>` and auto-join `channel-<id>`.
-  socket.on("huddle-started", async ({ channelId, roomId }) => {
+  socket.on("huddle-started", async ({ channelId, roomId } = {}) => {
     const cid = Number(channelId);
     if (!Number.isFinite(cid)) return;
-    // Prefer a stable room id (active session meeting_id) so everyone joins same huddle.
+
     let rid = roomId;
 
     try {
-      // Ensure starter is a member of the channel
       const membership = await prisma.channel_members.findFirst({
         where: {
           channel_id: cid,
@@ -291,7 +596,6 @@ export default function registerConnectionHuddleSockets(io, socket) {
         return;
       }
 
-      // Create or reuse active session; use its meeting_id as room id.
       let session = await prisma.huddleSession.findFirst({
         where: { channel_id: cid, ended_at: null },
         orderBy: { started_at: "desc" },
@@ -307,24 +611,16 @@ export default function registerConnectionHuddleSockets(io, socket) {
           },
         });
       }
-      rid = session.meeting_id;
 
-      // Auto-enter starter immediately.
-      const user = users.get(socket.id);
-      if (user) {
-        user.room = rid;
-        user.inCall = true;
-      }
-      socket.join(rid);
-      if (!roomParticipants.has(rid)) roomParticipants.set(rid, new Set());
-      roomParticipants.get(rid).add(socket.id);
+      rid = session.meeting_id;
       roomToChannel.set(rid, cid);
+      authorizeRoomJoin(rid, socket.id);
 
       const members = await prisma.channel_members.findMany({
         where: { channel_id: cid },
         select: { user_id: true },
       });
-      const userIds = members.map((m) => m.user_id).filter((x) => x != null);
+      const userIds = members.map((member) => member.user_id).filter((userId) => userId != null);
 
       const payload = {
         channelId: cid,
@@ -332,23 +628,17 @@ export default function registerConnectionHuddleSockets(io, socket) {
         startedBy: Number(socket.user?.id),
       };
 
-      // Ack to starter (already in room now)
       socket.emit("huddleJoined", payload);
-
-      // Notify everyone in the channel room (for online users already viewing the channel)
       io.to(`channel_${cid}`).emit("huddleStarted", payload);
-      // Also notify via personal rooms so offline-from-channel-view users can still get it
-      userIds.forEach((uid) => {
-        io.to(`user_${uid}`).emit("huddleStarted", payload);
+      userIds.forEach((userId) => {
+        io.to(`user_${userId}`).emit("huddleStarted", payload);
       });
-      broadcastUserList(io);
     } catch (err) {
       console.error("huddle-started error:", err.message);
       socket.emit("huddle-error", { error: "Failed to start huddle" });
     }
   });
 
-  // WebRTC signaling
   socket.on("offer", ({ to, offer }) => {
     io.to(to).emit("offer", {
       from: socket.id,
@@ -371,7 +661,6 @@ export default function registerConnectionHuddleSockets(io, socket) {
     });
   });
 
-  // Renegotiation (mid-call device swap)
   socket.on("renegotiate", ({ to, offer }) => {
     if (!to || !offer) return;
     io.to(to).emit("renegotiate", { from: socket.id, offer });
@@ -382,7 +671,6 @@ export default function registerConnectionHuddleSockets(io, socket) {
     io.to(to).emit("renegotiate-answer", { from: socket.id, answer });
   });
 
-  // Screen share status
   socket.on("screen-share-status", ({ roomId, sharing }) => {
     socket.to(roomId).emit("peer-screen-share-status", {
       userId: socket.id,
@@ -390,86 +678,38 @@ export default function registerConnectionHuddleSockets(io, socket) {
     });
   });
 
-  // Audio track updated — handle both event names the client may emit
   const handleAudioTrackUpdated = ({ roomId }) => {
     if (!roomId) return;
     socket.to(roomId).emit("peer-audio-updated", { from: socket.id });
   };
   socket.on("audio-track-updated", handleAudioTrackUpdated);
-  socket.on("peer-audio-updated",  handleAudioTrackUpdated);
+  socket.on("peer-audio-updated", handleAudioTrackUpdated);
 
-  // Leave room
-  socket.on("leave-room", (roomId) => {
-    const user = users.get(socket.id);
-    if (user) {
-      user.inCall = false;
-      user.room = null;
-    }
-
-    socket.leave(roomId);
-    const set = roomParticipants.get(roomId);
-    if (set) {
-      set.delete(socket.id);
-      if (set.size === 0) {
-        roomParticipants.delete(roomId);
-        const cid = roomToChannel.get(roomId);
-        if (cid) {
-          prisma.huddleSession
-            .updateMany({
-              where: { channel_id: cid, meeting_id: roomId, ended_at: null },
-              data: { ended_at: new Date() },
-            })
-            .then(() => {
-              io.to(`channel_${cid}`).emit("huddleEnded", { channelId: cid, roomId });
-            })
-            .catch((err) => console.error("huddleEnded persist error:", err.message));
-        }
-        roomToChannel.delete(roomId);
-      }
-    }
-    socket.to(roomId).emit("user-left", socket.id);
-    broadcastUserList(io);
+  socket.on("leave-room", (payload) => {
+    const roomId = typeof payload === "string" ? payload : payload?.roomId || users.get(socket.id)?.room;
+    leaveTrackedRoom(io, socket, roomId);
   });
 
-  // Disconnect
   socket.on("disconnect", () => {
     console.log(`❌ User disconnected: ${socket.id}`);
 
     const user = users.get(socket.id);
     if (user?.room) {
-      socket.to(user.room).emit("user-left", socket.id);
-      const roomId = user.room;
-      const set = roomParticipants.get(roomId);
-      if (set) {
-        set.delete(socket.id);
-        if (set.size === 0) {
-          roomParticipants.delete(roomId);
-          const cid = roomToChannel.get(roomId);
-          if (cid) {
-            prisma.huddleSession
-              .updateMany({
-                where: { channel_id: cid, meeting_id: roomId, ended_at: null },
-                data: { ended_at: new Date() },
-              })
-              .then(() => {
-                io.to(`channel_${cid}`).emit("huddleEnded", { channelId: cid, roomId });
-              })
-              .catch((err) => console.error("huddleEnded persist error:", err.message));
-          }
-          roomToChannel.delete(roomId);
-        }
-      }
+      leaveTrackedRoom(io, socket, user.room, { skipLeave: true });
     }
 
+    removePendingRequestsForSocket(socket.id).forEach((roomId) => {
+      emitRoomState(io, roomId);
+    });
+
+    clearRoomJoinAuthorizationsForSocket(socket.id);
     users.delete(socket.id);
     broadcastUserList(io);
   });
 
-  // Send initial list
   broadcastUserList(io);
 }
 
-// Helper
 function broadcastUserList(io) {
   const userList = Array.from(users.values()).map((user) => ({
     id: user.id,
