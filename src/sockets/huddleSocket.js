@@ -228,6 +228,70 @@ function consumeRoomJoinAuthorization(roomId, socketId) {
   return true;
 }
 
+async function getRoomSession(roomId) {
+  if (!roomId) return null;
+
+  const session = await prisma.huddleSession.findUnique({
+    where: { meeting_id: roomId },
+    select: {
+      meeting_id: true,
+      channel_id: true,
+      started_by: true,
+      ended_at: true,
+    },
+  });
+
+  if (session?.channel_id != null) {
+    roomToChannel.set(roomId, Number(session.channel_id));
+  }
+
+  return session;
+}
+
+async function isChannelMember(channelId, userId) {
+  const numericChannelId = Number(channelId);
+  const numericUserId = Number(userId);
+
+  if (!Number.isFinite(numericChannelId) || !Number.isFinite(numericUserId)) {
+    return false;
+  }
+
+  const membership = await prisma.channel_members.findFirst({
+    where: {
+      channel_id: numericChannelId,
+      user_id: numericUserId,
+    },
+    select: { user_id: true },
+  });
+
+  return !!membership;
+}
+
+async function getRoomAccessState(roomId, userId) {
+  const session = await getRoomSession(roomId);
+  const adminUserId =
+    session?.started_by != null ? Number(session.started_by) : null;
+  const channelId =
+    session?.channel_id != null ? Number(session.channel_id) : null;
+  const numericUserId = Number(userId);
+  const hasUserId = Number.isFinite(numericUserId);
+
+  const isAdmin =
+    hasUserId && adminUserId != null && numericUserId === adminUserId;
+  const isMember =
+    channelId != null && hasUserId
+      ? await isChannelMember(channelId, numericUserId)
+      : false;
+
+  return {
+    session,
+    adminUserId,
+    channelId,
+    isAdmin,
+    isMember,
+  };
+}
+
 function removePendingRequest(roomId, socketId) {
   const roomMap = roomPendingRequests.get(roomId);
   if (!roomMap?.has(socketId)) return false;
@@ -384,22 +448,48 @@ export default function registerConnectionHuddleSockets(io, socket) {
     io.to(to).emit("call-rejected", { reason });
   });
 
-  socket.on("huddle-room-preview", ({ roomId } = {}, ack) => {
+  socket.on("huddle-room-preview", async ({ roomId } = {}, ack) => {
     if (!roomId) {
-      ack?.({ roomId: null, participants: [], pending: [], sameUserActive: false, pendingRequest: false });
+      ack?.({
+        roomId: null,
+        participants: [],
+        pending: [],
+        sameUserActive: false,
+        pendingRequest: false,
+        adminUserId: null,
+        requesterIsChannelMember: false,
+      });
       return;
     }
 
-    ack?.({
-      roomId,
-      participants: getRoomParticipantsSnapshot(roomId),
-      pending: getRoomPendingSnapshot(roomId),
-      sameUserActive: hasSameUserActive(roomId, socket.user?.id, socket.id),
-      pendingRequest: roomPendingRequests.get(roomId)?.has(socket.id) || false,
-    });
+    try {
+      const access = await getRoomAccessState(roomId, socket.user?.id);
+
+      ack?.({
+        roomId,
+        participants: getRoomParticipantsSnapshot(roomId),
+        pending: getRoomPendingSnapshot(roomId),
+        sameUserActive: hasSameUserActive(roomId, socket.user?.id, socket.id),
+        pendingRequest: roomPendingRequests.get(roomId)?.has(socket.id) || false,
+        adminUserId:
+          access.adminUserId != null ? String(access.adminUserId) : null,
+        requesterIsChannelMember: access.isMember,
+      });
+    } catch (err) {
+      console.error("huddle-room-preview error:", err.message);
+      ack?.({
+        roomId,
+        participants: getRoomParticipantsSnapshot(roomId),
+        pending: getRoomPendingSnapshot(roomId),
+        sameUserActive: hasSameUserActive(roomId, socket.user?.id, socket.id),
+        pendingRequest: roomPendingRequests.get(roomId)?.has(socket.id) || false,
+        adminUserId: null,
+        requesterIsChannelMember: false,
+      });
+    }
   });
 
-  socket.on("request-room-admission", ({ roomId, username } = {}, ack) => {
+  socket.on("request-room-admission", async ({ roomId, username } = {}, ack) => {
     if (!roomId) {
       ack?.({ ok: false, error: "Missing room id" });
       return;
@@ -413,6 +503,18 @@ export default function registerConnectionHuddleSockets(io, socket) {
       ack?.({ ok: true, directJoin: true });
       socket.emit("room-admission-result", { roomId, status: "admitted" });
       return;
+    }
+
+    try {
+      const access = await getRoomAccessState(roomId, socket.user?.id);
+      if (access.isMember) {
+        authorizeRoomJoin(roomId, socket.id);
+        ack?.({ ok: true, directJoin: true });
+        socket.emit("room-admission-result", { roomId, status: "admitted" });
+        return;
+      }
+    } catch (err) {
+      console.error("request-room-admission error:", err.message);
     }
 
     const pendingMap = ensurePendingMap(roomId);
@@ -432,13 +534,31 @@ export default function registerConnectionHuddleSockets(io, socket) {
     emitRoomState(io, roomId);
   });
 
-  socket.on("respond-room-admission", ({ roomId, targetSocketId, admit } = {}) => {
+  socket.on("respond-room-admission", async ({ roomId, targetSocketId, admit } = {}, ack) => {
     if (!roomId || !targetSocketId) return;
 
     const participantSet = roomParticipants.get(roomId);
-    if (!participantSet?.has(socket.id)) return;
+    if (!participantSet?.has(socket.id)) {
+      ack?.({ ok: false, error: "Join the huddle before managing requests" });
+      return;
+    }
 
-    if (!removePendingRequest(roomId, targetSocketId)) return;
+    try {
+      const access = await getRoomAccessState(roomId, socket.user?.id);
+      if (access.adminUserId != null && !access.isAdmin) {
+        ack?.({ ok: false, error: "Only the huddle admin can manage requests" });
+        return;
+      }
+    } catch (err) {
+      console.error("respond-room-admission error:", err.message);
+      ack?.({ ok: false, error: "Could not verify huddle permissions" });
+      return;
+    }
+
+    if (!removePendingRequest(roomId, targetSocketId)) {
+      ack?.({ ok: false, error: "That join request is no longer pending" });
+      return;
+    }
 
     if (admit) {
       authorizeRoomJoin(roomId, targetSocketId);
@@ -450,6 +570,7 @@ export default function registerConnectionHuddleSockets(io, socket) {
     });
 
     emitRoomState(io, roomId);
+    ack?.({ ok: true });
   });
 
   socket.on("huddle-chat-message", ({ roomId, text } = {}, ack) => {
@@ -480,7 +601,7 @@ export default function registerConnectionHuddleSockets(io, socket) {
     ack?.({ ok: true });
   });
 
-  socket.on("kick-participant", ({ roomId, targetSocketId } = {}, ack) => {
+  socket.on("kick-participant", async ({ roomId, targetSocketId } = {}, ack) => {
     if (!roomId || !targetSocketId) {
       ack?.({ ok: false, error: "Missing participant or room" });
       return;
@@ -489,6 +610,18 @@ export default function registerConnectionHuddleSockets(io, socket) {
     const participantSet = roomParticipants.get(roomId);
     if (!participantSet?.has(socket.id)) {
       ack?.({ ok: false, error: "Only current participants can remove someone" });
+      return;
+    }
+
+    try {
+      const access = await getRoomAccessState(roomId, socket.user?.id);
+      if (access.adminUserId != null && !access.isAdmin) {
+        ack?.({ ok: false, error: "Only the huddle admin can remove participants" });
+        return;
+      }
+    } catch (err) {
+      console.error("kick-participant error:", err.message);
+      ack?.({ ok: false, error: "Could not verify huddle permissions" });
       return;
     }
 
@@ -525,7 +658,7 @@ export default function registerConnectionHuddleSockets(io, socket) {
     ack?.({ ok: true });
   });
 
-  socket.on("join-room", (payload, ack) => {
+  socket.on("join-room", async (payload, ack) => {
     const roomId = typeof payload === "string" ? payload : payload?.roomId;
     if (!roomId) {
       ack?.({ ok: false, error: "Missing room id" });
@@ -537,11 +670,20 @@ export default function registerConnectionHuddleSockets(io, socket) {
     const participantCount = roomParticipants.get(roomId)?.size || 0;
     const sameUserActive = hasSameUserActive(roomId, socket.user?.id, socket.id);
     const isAuthorized = consumeRoomJoinAuthorization(roomId, socket.id);
+    let roomAccess = null;
 
     if (!alreadyJoined && participantCount > 0 && !sameUserActive && !isAuthorized) {
-      ack?.({ ok: false, reason: "admission-required" });
-      socket.emit("room-admission-required", { roomId });
-      return;
+      try {
+        roomAccess = await getRoomAccessState(roomId, socket.user?.id);
+      } catch (err) {
+        console.error("join-room access lookup error:", err.message);
+      }
+
+      if (!roomAccess?.isMember) {
+        ack?.({ ok: false, reason: "admission-required" });
+        socket.emit("room-admission-required", { roomId });
+        return;
+      }
     }
 
     if (user) {
@@ -569,11 +711,21 @@ export default function registerConnectionHuddleSockets(io, socket) {
     emitRoomState(io, roomId);
     broadcastUserList(io);
 
+    if (!roomAccess) {
+      try {
+        roomAccess = await getRoomAccessState(roomId, socket.user?.id);
+      } catch (err) {
+        console.error("join-room admin lookup error:", err.message);
+      }
+    }
+
     ack?.({
       ok: true,
       participants: getRoomParticipantsSnapshot(roomId),
       pending: getRoomPendingSnapshot(roomId),
       chatHistory: getRoomChatHistory(roomId),
+      adminUserId:
+        roomAccess?.adminUserId != null ? String(roomAccess.adminUserId) : null,
     });
   });
 
@@ -625,7 +777,7 @@ export default function registerConnectionHuddleSockets(io, socket) {
       const payload = {
         channelId: cid,
         roomId: rid,
-        startedBy: Number(socket.user?.id),
+        startedBy: Number(session.started_by),
       };
 
       socket.emit("huddleJoined", payload);

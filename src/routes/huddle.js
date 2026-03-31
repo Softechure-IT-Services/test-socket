@@ -219,7 +219,7 @@ router.post("/channel/:channelId/start", authenticateToken, async (req, res) => 
       channel_id: channelId,
       channel_name: channel.name,
       meeting_id: session.meeting_id,
-      started_by: startedBy,
+      started_by: session.started_by,
       created,
     };
 
