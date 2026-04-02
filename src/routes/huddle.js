@@ -332,4 +332,38 @@ router.get("/channel/:channelId/active", authenticateToken, async (req, res) => 
   }
 });
 
+/**
+ * POST /huddle/instant
+ * Generates a unique meeting ID, persists a new huddle session, and returns it.
+ */
+router.post("/instant", authenticateToken, async (req, res) => {
+  const startedBy = Number(req.user?.id);
+
+  if (!Number.isFinite(startedBy)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const meetingId = `instant-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+    
+    const session = await prisma.huddleSession.create({
+      data: {
+        meeting_id: meetingId,
+        started_by: startedBy,
+        started_at: new Date(),
+      },
+    });
+
+    return res.status(201).json({
+      success: true,
+      created: true,
+      session,
+      room_id: session.meeting_id,
+    });
+  } catch (err) {
+    console.error("POST /huddle/instant error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 export default router;

@@ -126,16 +126,22 @@ export const loginUser = async ({ email, password }) => {
  */
 export const refreshTokens = async (token) => {
   if (!token) throw { status: 401, message: "No refresh token" };
-  const payload = verifyRefreshToken(token);
+  verifyRefreshToken(token);
   const tokenHash = hashToken(token);
 
   const record = await prisma.refresh_tokens.findFirst({
-    where: { token_hash: tokenHash },
+    where: {
+      token_hash: tokenHash,
+      revoked: false,
+      expires_at: { gte: new Date() },
+    },
+    orderBy: { created_at: "desc" },
   });
 
   if (!record || record.revoked) throw { status: 401, message: "Refresh token revoked or not found" };
 
   const user = await prisma.users.findUnique({ where: { id: record.user_id } });
+  if (!user) throw { status: 404, message: "User not found" };
 
   // Rotate tokens
   const newAccess = generateAccessToken(user);

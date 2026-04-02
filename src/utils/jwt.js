@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import { randomUUID } from "crypto";
 import "dotenv/config";
 
 const ACCESS_TOKEN_SECRET = process.env.JWT_ACCESS_SECRET || "your_jwt_access_secret";
@@ -20,7 +21,7 @@ export const generateAccessToken = (user) => {
  */
 export const generateRefreshToken = (user) => {
   return jwt.sign(
-    { id: user.id },
+    { id: user.id, jti: randomUUID() },
     REFRESH_TOKEN_SECRET,
     { expiresIn: "7d" }
   );

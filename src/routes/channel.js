@@ -17,6 +17,26 @@ import { getPreviewText } from "../utils/format.js";
 
 router.use(verifyToken);
 
+function normalizeStoredReactionUsers(rawUsers = []) {
+  if (!Array.isArray(rawUsers)) return [];
+
+  return rawUsers.map((rawUser) => {
+    if (rawUser && typeof rawUser === "object") {
+      const parsedId = Number(rawUser.id);
+      return {
+        id: Number.isFinite(parsedId) ? parsedId : null,
+        name: rawUser.username ?? rawUser.name ?? null,
+      };
+    }
+
+    const parsedId = Number(rawUser);
+    return {
+      id: Number.isFinite(parsedId) ? parsedId : null,
+      name: null,
+    };
+  });
+}
+
 // router.get("/search-user-and-channel", async (req, res) => {
 //   try {
 //     const userId = req.user.id;
@@ -300,6 +320,7 @@ router.get("/:channelId/messages", async (req, res) => {
         users: {
           select: {
             name: true,
+            username: true,
             avatar_url: true,
           },
         },
@@ -332,13 +353,22 @@ router.get("/:channelId/messages", async (req, res) => {
       try { return JSON.parse(m.reactions || "[]"); } catch { return []; }
     });
 
+    const normalizedReactions = allRawReactions.map((rxList) =>
+      rxList.map((rx) => {
+        const users = normalizeStoredReactionUsers(rx.users);
+        return {
+          ...rx,
+          users,
+        };
+      })
+    );
+
     // Collect every unique user ID referenced in any reaction across all messages
     const reactionUserIds = new Set();
-    for (const rxList of allRawReactions) {
+    for (const rxList of normalizedReactions) {
       for (const rx of rxList) {
-        for (const uid of (rx.users ?? [])) {
-          const n = Number(uid);
-          if (!isNaN(n)) reactionUserIds.add(n);
+        for (const user of rx.users ?? []) {
+          if (user.id !== null) reactionUserIds.add(user.id);
         }
       }
     }
@@ -347,20 +377,25 @@ router.get("/:channelId/messages", async (req, res) => {
     const reactionUsers = reactionUserIds.size > 0
       ? await prisma.users.findMany({
           where: { id: { in: [...reactionUserIds] } },
-          select: { id: true, name: true },
+          select: { id: true, name: true, username: true },
         })
       : [];
-    const reactionUserMap = Object.fromEntries(reactionUsers.map((u) => [u.id, u.name]));
+    const reactionUserMap = Object.fromEntries(
+      reactionUsers.map((u) => [u.id, u.username || u.name || "Unknown"])
+    );
 
     // Build hydrated reactions arrays indexed by message position
     const hydratedReactionsById = new Map();
     messages.forEach((m, i) => {
-      const hydrated = allRawReactions[i].map((rx) => ({
+      const hydrated = normalizedReactions[i].map((rx, rxIndex) => ({
         emoji: rx.emoji,
         count: rx.count,
-        users: (rx.users ?? []).map((uid) => ({
-          id: Number(uid),
-          name: reactionUserMap[Number(uid)] ?? "Unknown",
+        users: (rx.users ?? []).map((user, userIndex) => ({
+          id: user.id ?? `reaction-${m.id}-${rxIndex}-${userIndex}`,
+          name:
+            user.name ||
+            (user.id !== null ? reactionUserMap[user.id] : null) ||
+            "Unknown",
         })),
       }));
       hydratedReactionsById.set(m.id, hydrated);
@@ -396,7 +431,7 @@ router.get("/:channelId/messages", async (req, res) => {
           pinned: m.pinned,
           created_at: m.created_at,
           updated_at: m.updated_at,
-          sender_name: m.users?.name ?? null,
+          sender_name: m.users?.username ?? m.users?.name ?? null,
           avatar_url: m.users?.avatar_url ?? null,
           is_forwarded: m.is_forwarded ?? false,
           forwarded_from: forwardedFrom,

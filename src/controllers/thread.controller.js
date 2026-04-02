@@ -2,6 +2,66 @@ import prisma from "../config/prisma.js";
 import { io } from "../sockets/index.js";
 import { getPreviewText } from "../utils/format.js";
 
+function normalizeStoredReactionUsers(rawUsers = []) {
+  if (!Array.isArray(rawUsers)) return [];
+
+  return rawUsers.map((rawUser) => {
+    if (rawUser && typeof rawUser === "object") {
+      const parsedId = Number(rawUser.id);
+      return {
+        id: Number.isFinite(parsedId) ? parsedId : null,
+        name: rawUser.username ?? rawUser.name ?? null,
+      };
+    }
+
+    const parsedId = Number(rawUser);
+    return {
+      id: Number.isFinite(parsedId) ? parsedId : null,
+      name: null,
+    };
+  });
+}
+
+async function hydrateStoredReactions(rawReactions) {
+  const parsedReactions = Array.isArray(rawReactions) ? rawReactions : [];
+  const normalizedReactions = parsedReactions.map((reaction) => ({
+    ...reaction,
+    users: normalizeStoredReactionUsers(reaction.users),
+  }));
+
+  const reactionUserIds = [
+    ...new Set(
+      normalizedReactions
+        .flatMap((reaction) => reaction.users ?? [])
+        .map((user) => user.id)
+        .filter((userId) => userId !== null)
+    ),
+  ];
+
+  const reactionUsers = reactionUserIds.length
+    ? await prisma.users.findMany({
+        where: { id: { in: reactionUserIds } },
+        select: { id: true, name: true, username: true },
+      })
+    : [];
+
+  const reactionUserMap = Object.fromEntries(
+    reactionUsers.map((user) => [user.id, user.username || user.name || "Unknown"])
+  );
+
+  return normalizedReactions.map((reaction, reactionIndex) => ({
+    emoji: reaction.emoji,
+    count: reaction.count,
+    users: (reaction.users ?? []).map((user, userIndex) => ({
+      id: user.id ?? `reaction-${reactionIndex}-${userIndex}`,
+      name:
+        user.name ||
+        (user.id !== null ? reactionUserMap[user.id] : null) ||
+        "Unknown",
+    })),
+  }));
+}
+
 export const getThreadReplies = async (req, res) => {
   const { messageId } = req.params;
   try {
@@ -20,6 +80,19 @@ export const getThreadReplies = async (req, res) => {
         },
       },
     });
+
+    const parentReactionsRaw =
+      parent?.reactions
+        ? typeof parent.reactions === "string"
+          ? (() => {
+              try {
+                return JSON.parse(parent.reactions);
+              } catch {
+                return [];
+              }
+            })()
+          : parent.reactions
+        : [];
 
     const parent_message = parent
       ? {
@@ -41,18 +114,7 @@ export const getThreadReplies = async (req, res) => {
                   })()
                 : parent.files
               : [],
-          reactions:
-            parent.reactions
-              ? typeof parent.reactions === "string"
-                ? (() => {
-                    try {
-                      return JSON.parse(parent.reactions);
-                    } catch {
-                      return [];
-                    }
-                  })()
-                : parent.reactions
-              : [],
+          reactions: await hydrateStoredReactions(parentReactionsRaw),
           pinned: parent.pinned ?? false,
           is_edited: parent.is_edited ?? false,
         }
@@ -83,11 +145,29 @@ export const getThreadReplies = async (req, res) => {
       orderBy: { created_at: "asc" },
     });
 
-    const mapped = replies.map((r) => ({
-      ...r,
-      sender_name: r.users?.username || r.users?.name || "Unknown",
-      avatar_url: r.users?.avatar_url || null,
-    }));
+    const mapped = await Promise.all(
+      replies.map(async (r) => {
+        const replyReactionsRaw =
+          r.reactions
+            ? typeof r.reactions === "string"
+              ? (() => {
+                  try {
+                    return JSON.parse(r.reactions);
+                  } catch {
+                    return [];
+                  }
+                })()
+              : r.reactions
+            : [];
+
+        return {
+          ...r,
+          sender_name: r.users?.username || r.users?.name || "Unknown",
+          avatar_url: r.users?.avatar_url || null,
+          reactions: await hydrateStoredReactions(replyReactionsRaw),
+        };
+      })
+    );
 
     res.json({ success: true, parent_message, replies: mapped });
   } catch (err) {
