@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import {
   generateAccessToken,
 } from "../utils/jwt.js";
+import { generateUniqueUsernameFromName } from "../controllers/auth.controller.js";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -57,10 +58,13 @@ router.post("/external-create", async (req, res) => {
       });
     }
 
+    const generatedUsername = await generateUniqueUsernameFromName(name);
+
     await prisma.users.create({
       data: {
         external_id,
         name,
+        username: generatedUsername,
         email,
         auth_token: external_auth,
       },

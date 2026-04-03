@@ -2,26 +2,46 @@ import prisma from "../config/prisma.js";
 
 export const searchAll = async (req, res) => {
   const userId = req.user.id;
-  const { q } = req.query;
+  const { q, channelId } = req.query;
+  const scopedChannelId =
+    channelId !== undefined && channelId !== null && channelId !== ""
+      ? Number(channelId)
+      : null;
+  const isScopedSearch =
+    scopedChannelId !== null && Number.isFinite(scopedChannelId);
 
-  if (!q) return res.json({ messages: [], channels: [], users: [] });
+  if (!q) {
+    return res.json({
+      success: true,
+      data: { messages: [], channels: [], people: [] },
+    });
+  }
 
   try {
+    const accessibleChannelWhere = {
+      OR: [
+        { is_private: false },
+        { channel_members: { some: { user_id: userId } } },
+      ],
+    };
+
     const [messages, channels, users] = await Promise.all([
       prisma.messages.findMany({
         where: {
           content: { contains: q },
-          OR: [
-            { channel_id: null }, // DM messages handles differently? No, let's just search all accessible
-            {
-              channel: {
+          ...(isScopedSearch
+            ? {
+                channel_id: scopedChannelId,
+                channel: accessibleChannelWhere,
+              }
+            : {
                 OR: [
-                  { is_private: false },
-                  { channel_members: { some: { user_id: userId } } },
+                  { channel_id: null }, // DM messages handles differently? No, let's just search all accessible
+                  {
+                    channel: accessibleChannelWhere,
+                  },
                 ],
-              },
-            },
-          ],
+              }),
         },
         include: {
           users: { select: { name: true, username: true, avatar_url: true } },
@@ -47,33 +67,34 @@ export const searchAll = async (req, res) => {
         },
         take: 20,
       }),
-      prisma.channels.findMany({
-        where: {
-          name: { contains: q },
-          is_dm: false,
-          OR: [
-            { is_private: false },
-            { channel_members: { some: { user_id: userId } } },
-          ],
-        },
-        take: 10,
-      }),
-      prisma.users.findMany({
-        where: {
-          OR: [
-            { name: { contains: q } },
-            { username: { contains: q } },
-          ],
-        },
-        select: {
-          id: true,
-          name: true,
-          username: true,
-          avatar_url: true,
-          is_online: true,
-        },
-        take: 10,
-      }),
+      isScopedSearch
+        ? []
+        : prisma.channels.findMany({
+            where: {
+              name: { contains: q },
+              is_dm: false,
+              ...accessibleChannelWhere,
+            },
+            take: 10,
+          }),
+      isScopedSearch
+        ? []
+        : prisma.users.findMany({
+            where: {
+              OR: [
+                { name: { contains: q } },
+                { username: { contains: q } },
+              ],
+            },
+            select: {
+              id: true,
+              name: true,
+              username: true,
+              avatar_url: true,
+              is_online: true,
+            },
+            take: 10,
+          }),
     ]);
 
     const mappedMessages = messages.map((m) => ({

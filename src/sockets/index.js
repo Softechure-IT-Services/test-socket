@@ -118,13 +118,14 @@ export function initSocket(server) {
         try {
           const fresh = await prisma.users.findUnique({
             where: { id: socket.user.id },
-            select: { id: true, name: true, username: true, email: true, avatar_url: true },
+            select: { id: true, name: true, username: true, email: true, avatar_url: true, status: true },
           });
           if (fresh) {
             socket.user.name       = fresh.name;
             socket.user.username   = fresh.username;
             socket.user.avatar_url = fresh.avatar_url;
             socket.user.email      = fresh.email;
+            socket.user.status     = fresh.status;
             // Echo the updated profile back so the client can update its auth context
             socket.emit("userProfileRefreshed", fresh);
           }

@@ -114,6 +114,31 @@ import { io } from "../sockets/index.js";
 const router = express.Router();
 const prisma = new PrismaClient();
 
+async function getStartedByUsername(userId) {
+  const numericUserId = Number(userId);
+  if (!Number.isFinite(numericUserId)) return null;
+
+  const user = await prisma.users.findUnique({
+    where: { id: numericUserId },
+    select: {
+      username: true,
+      name: true,
+    },
+  });
+
+  return user?.username?.trim() || user?.name?.trim() || null;
+}
+
+async function enrichSessionWithStarter(session) {
+  if (!session) return null;
+
+  const startedByUsername = await getStartedByUsername(session.started_by);
+  return {
+    ...session,
+    started_by_username: startedByUsername,
+  };
+}
+
 /**
  * GET /huddle?user_id=&meeting_id=&channel_id=
  * Returns the requesting user's public profile.
@@ -215,11 +240,13 @@ router.post("/channel/:channelId/start", authenticateToken, async (req, res) => 
     });
     const memberIds = members.map((m) => m.user_id).filter((id) => id != null);
 
+    const sessionWithStarter = await enrichSessionWithStarter(session);
     const payload = {
       channel_id: channelId,
       channel_name: channel.name,
       meeting_id: session.meeting_id,
       started_by: session.started_by,
+      started_by_username: sessionWithStarter?.started_by_username ?? null,
       created,
     };
 
@@ -233,8 +260,9 @@ router.post("/channel/:channelId/start", authenticateToken, async (req, res) => 
     return res.status(created ? 201 : 200).json({
       success: true,
       created,
-      session,
+      session: sessionWithStarter,
       room_id: session.meeting_id,
+      started_by_username: sessionWithStarter?.started_by_username ?? null,
       members: memberIds,
     });
   } catch (err) {
@@ -319,12 +347,14 @@ router.get("/channel/:channelId/active", authenticateToken, async (req, res) => 
       where: { channel_id: channelId, ended_at: null },
       orderBy: { started_at: "desc" },
     });
+    const activeWithStarter = await enrichSessionWithStarter(active);
 
     return res.status(200).json({
       success: true,
       active: !!active,
-      session: active ?? null,
+      session: activeWithStarter,
       room_id: active?.meeting_id ?? null,
+      started_by_username: activeWithStarter?.started_by_username ?? null,
     });
   } catch (err) {
     console.error("GET /huddle/channel/:channelId/active error:", err);
@@ -353,12 +383,14 @@ router.post("/instant", authenticateToken, async (req, res) => {
         started_at: new Date(),
       },
     });
+    const sessionWithStarter = await enrichSessionWithStarter(session);
 
     return res.status(201).json({
       success: true,
       created: true,
-      session,
+      session: sessionWithStarter,
       room_id: session.meeting_id,
+      started_by_username: sessionWithStarter?.started_by_username ?? null,
     });
   } catch (err) {
     console.error("POST /huddle/instant error:", err);

@@ -22,7 +22,11 @@ import prisma from "../config/prisma.js";
 import verifyToken from "../middleware/auth.js";
 import supabase from "../utils/supabase.js";
 import { io } from "../sockets/index.js";
-import { isUsernameAvailable, normaliseUsername, validateUsername } from "../controllers/auth.controller.js";
+import {
+  isUsernameAvailable,
+  normaliseUsername,
+  validateUsername,
+} from "../controllers/auth.controller.js";
 
 const router = express.Router();
 
@@ -139,6 +143,7 @@ router.get("/me", async (req, res) => {
 
 // ─── PATCH /users/me ──────────────────────────────────────────────────────────
 // Update display name, username, status, and/or bio.
+// Username is editable and only changes when explicitly sent.
 // Body: { name?, username?, status?, bio? }
 
 router.patch("/me", async (req, res) => {
@@ -153,12 +158,18 @@ router.patch("/me", async (req, res) => {
   }
 
   if (username !== undefined) {
-    const norm = normaliseUsername(username);
-    const usernameError = validateUsername(norm);
-    if (usernameError) return res.status(400).json({ error: usernameError });
-    const available = await isUsernameAvailable(norm, req.userId);
-    if (!available) return res.status(409).json({ error: "Username already taken." });
-    data.username = norm;
+    const normalisedUsername = normaliseUsername(username);
+    const usernameError = validateUsername(normalisedUsername);
+    if (usernameError) {
+      return res.status(400).json({ error: usernameError });
+    }
+
+    const available = await isUsernameAvailable(normalisedUsername, req.userId);
+    if (!available) {
+      return res.status(409).json({ error: "Username is already taken." });
+    }
+
+    data.username = normalisedUsername;
   }
 
   // status and bio are free-text — store empty string as null for cleanliness
@@ -179,6 +190,7 @@ router.patch("/me", async (req, res) => {
         username: true,
         email: true,
         avatar_url: true,
+        status: true,
       },
     });
 

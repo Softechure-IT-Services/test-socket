@@ -42,21 +42,46 @@ export const isUsernameAvailable = async (username, excludeUserId = null) => {
   return existing === null;
 };
 
+export const buildUsernameBaseFromName = (name) => {
+  if (!name || typeof name !== "string") return "user";
+
+  const cleaned = name
+    .trim()
+    .toLowerCase()
+    .replace(/['’]/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_");
+
+  const base = cleaned.length >= 3 ? cleaned : `user_${cleaned || "account"}`;
+  return base.slice(0, 30).replace(/^_+|_+$/g, "") || "user";
+};
+
+export const generateUniqueUsernameFromName = async (name, excludeUserId = null) => {
+  const base = buildUsernameBaseFromName(name);
+  let candidate = base;
+  let suffix = 1;
+
+  while (!(await isUsernameAvailable(candidate, excludeUserId))) {
+    const suffixText = `_${suffix}`;
+    candidate = `${base.slice(0, 30 - suffixText.length)}${suffixText}`;
+    suffix += 1;
+  }
+
+  return candidate;
+};
+
 /**
  * Register a new user
  */
-export const registerUser = async ({ external_id, name, email, avatar_url, password, username }) => {
+export const registerUser = async ({ external_id, name, email, avatar_url, password }) => {
   // Check if email already exists
   const existing = await prisma.users.findUnique({ where: { email } });
   if (existing) throw { status: 409, message: "Email already registered" };
 
-  // Validate username
-  const normUsername = normaliseUsername(username);
-  const usernameError = validateUsername(normUsername);
-  if (usernameError) throw { status: 400, message: usernameError };
-
-  const usernameTaken = !(await isUsernameAvailable(normUsername));
-  if (usernameTaken) throw { status: 409, message: "Username already taken" };
+  if (!name || !name.trim()) throw { status: 400, message: "Full name is required" };
+  const cleanName = name.trim();
+  const generatedUsername = await generateUniqueUsernameFromName(cleanName);
 
   // Normalize password so whitespace-only values are rejected
   if (!password || !password.trim()) throw { status: 400, message: "Password is required" };
@@ -67,9 +92,9 @@ export const registerUser = async ({ external_id, name, email, avatar_url, passw
   const user = await prisma.users.create({
     data: {
       external_id,
-      name,
+      name: cleanName,
       email,
-      username: normUsername,
+      username: generatedUsername,
       avatar_url,
       password: hashedPassword,
       is_online: false,

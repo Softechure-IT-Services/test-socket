@@ -176,6 +176,21 @@ const roomJoinAuthorizations = new Map(); // roomId -> Set<socketId>
 const roomChatHistory = new Map(); // roomId -> chat messages kept for the active huddle
 const roomToChannel = new Map(); // roomId -> channelId
 
+async function getStartedByUsername(userId) {
+  const numericUserId = Number(userId);
+  if (!Number.isFinite(numericUserId)) return null;
+
+  const user = await prisma.users.findUnique({
+    where: { id: numericUserId },
+    select: {
+      username: true,
+      name: true,
+    },
+  });
+
+  return user?.username?.trim() || user?.name?.trim() || null;
+}
+
 function ensureSet(map, key) {
   if (!map.has(key)) map.set(key, new Set());
   return map.get(key);
@@ -245,7 +260,12 @@ async function getRoomSession(roomId) {
     roomToChannel.set(roomId, Number(session.channel_id));
   }
 
-  return session;
+  if (!session) return null;
+
+  return {
+    ...session,
+    started_by_username: await getStartedByUsername(session.started_by),
+  };
 }
 
 async function isChannelMember(channelId, userId) {
@@ -286,6 +306,7 @@ async function getRoomAccessState(roomId, userId) {
   return {
     session,
     adminUserId,
+    adminUsername: session?.started_by_username ?? null,
     channelId,
     isAdmin,
     isMember,
@@ -457,6 +478,7 @@ export default function registerConnectionHuddleSockets(io, socket) {
         sameUserActive: false,
         pendingRequest: false,
         adminUserId: null,
+        adminUsername: null,
         requesterIsChannelMember: false,
       });
       return;
@@ -473,6 +495,7 @@ export default function registerConnectionHuddleSockets(io, socket) {
         pendingRequest: roomPendingRequests.get(roomId)?.has(socket.id) || false,
         adminUserId:
           access.adminUserId != null ? String(access.adminUserId) : null,
+        adminUsername: access.adminUsername ?? null,
         requesterIsChannelMember: access.isMember,
       });
     } catch (err) {
@@ -484,6 +507,7 @@ export default function registerConnectionHuddleSockets(io, socket) {
         sameUserActive: hasSameUserActive(roomId, socket.user?.id, socket.id),
         pendingRequest: roomPendingRequests.get(roomId)?.has(socket.id) || false,
         adminUserId: null,
+        adminUsername: null,
         requesterIsChannelMember: false,
       });
     }
@@ -726,6 +750,7 @@ export default function registerConnectionHuddleSockets(io, socket) {
       chatHistory: getRoomChatHistory(roomId),
       adminUserId:
         roomAccess?.adminUserId != null ? String(roomAccess.adminUserId) : null,
+      adminUsername: roomAccess?.adminUsername ?? null,
     });
   });
 

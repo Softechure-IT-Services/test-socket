@@ -13,6 +13,7 @@ export const getAllUsers = async () => {
       username: true,
       email: true,
       avatar_url: true,
+      status: true,
       is_online: true,
       last_seen: true,
       created_at: true,
@@ -96,18 +97,22 @@ export const searchUsers = async (q, exclude) => {
  */
 export const updateUser = async (userId, { name, email, avatar_url, username }) => {
   const data = {};
-  if (name !== undefined) data.name = name;
-  if (email !== undefined) data.email = email;
-  if (avatar_url !== undefined) data.avatar_url = avatar_url;
+  if (name !== undefined) {
+    const trimmedName = String(name).trim();
+    if (!trimmedName) throw { status: 400, message: "Name cannot be empty." };
+    data.name = trimmedName;
+  }
   if (username !== undefined) {
-    const { normaliseUsername, validateUsername, isUsernameAvailable } = await import("./auth.controller.js");
+    const { isUsernameAvailable, normaliseUsername, validateUsername } = await import("./auth.controller.js");
     const norm = normaliseUsername(username);
-    const err = validateUsername(norm);
-    if (err) throw { status: 400, message: err };
+    const error = validateUsername(norm);
+    if (error) throw { status: 400, message: error };
     const available = await isUsernameAvailable(norm, userId);
-    if (!available) throw { status: 409, message: "Username already taken" };
+    if (!available) throw { status: 409, message: "Username is already taken." };
     data.username = norm;
   }
+  if (email !== undefined) data.email = email;
+  if (avatar_url !== undefined) data.avatar_url = avatar_url;
   data.updated_at = new Date();
 
   return prisma.users.update({
@@ -119,6 +124,7 @@ export const updateUser = async (userId, { name, email, avatar_url, username }) 
       username: true,
       email: true,
       avatar_url: true,
+      status: true,
     },
   });
 };
