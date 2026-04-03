@@ -27,6 +27,12 @@ import {
   normaliseUsername,
   validateUsername,
 } from "../controllers/auth.controller.js";
+import {
+  buildPresenceEventPayload,
+  getStoredPreferencesForUser,
+  isMissingPreferenceColumnError,
+  updateStoredPreferencesForUser,
+} from "../utils/userPreferences.js";
 
 const router = express.Router();
 
@@ -133,7 +139,13 @@ router.get("/me", async (req, res) => {
 
     if (!user) return res.status(404).json({ error: "User not found" });
 
-    res.json(user);
+    const preferences = await getStoredPreferencesForUser(req.userId);
+
+    res.json({
+      ...user,
+      notification_preferences: preferences.notificationPreferences,
+      privacy_preferences: preferences.privacyPreferences,
+    });
   } catch (err) {
     console.error("GET /users/me error:", err);
     res.status(500).json({ error: "Failed to fetch profile" });
@@ -202,6 +214,81 @@ router.patch("/me", async (req, res) => {
   } catch (err) {
     console.error("PATCH /users/me error:", err);
     res.status(500).json({ error: "Failed to update profile" });
+  }
+});
+
+// PATCH /users/me/preferences
+// Body: {
+//   notification_preferences?: {...},
+//   privacy_preferences?: {...}
+// }
+router.patch("/me/preferences", async (req, res) => {
+  const {
+    notification_preferences: notificationPreferences,
+    privacy_preferences: privacyPreferences,
+  } = req.body ?? {};
+
+  if (notificationPreferences === undefined && privacyPreferences === undefined) {
+    return res.status(400).json({ error: "No preference fields to update." });
+  }
+
+  try {
+    const updatedPreferences = await updateStoredPreferencesForUser(req.userId, {
+      notificationPreferences,
+      privacyPreferences,
+    });
+
+    const currentPresence = await prisma.users.findUnique({
+      where: { id: req.userId },
+      select: {
+        id: true,
+        name: true,
+        username: true,
+        avatar_url: true,
+        status: true,
+        is_online: true,
+        last_seen: true,
+      },
+    });
+
+    if (io && currentPresence) {
+      io.emit(
+        "userPresenceChanged",
+        buildPresenceEventPayload({
+          userId: currentPresence.id,
+          isOnline: currentPresence.is_online,
+          lastSeen: currentPresence.last_seen,
+          privacyPreferences: updatedPreferences.privacyPreferences,
+        })
+      );
+
+      io.emit("userUpdated", {
+        id: currentPresence.id,
+        name: currentPresence.name,
+        username: currentPresence.username,
+        avatar_url: currentPresence.avatar_url,
+        status: currentPresence.status,
+        is_online: currentPresence.is_online,
+        last_seen: currentPresence.last_seen,
+        presence_hidden: !updatedPreferences.privacyPreferences.showOnlineStatus,
+      });
+    }
+
+    res.json({
+      success: true,
+      notification_preferences: updatedPreferences.notificationPreferences,
+      privacy_preferences: updatedPreferences.privacyPreferences,
+    });
+  } catch (err) {
+    console.error("PATCH /users/me/preferences error:", err);
+
+    if (isMissingPreferenceColumnError(err)) {
+      return res.status(500).json({
+        error: "Preference columns are missing. Apply the latest database migration first.",
+      });
+    }
+
+    res.status(500).json({ error: "Failed to update preferences." });
   }
 });
 

@@ -253,7 +253,9 @@ export const addThreadReply = async (req, res) => {
       
       const cm = await prisma.channel_members.findMany({ where: { channel_id: parentMsg.channel_id }, select: { user_id: true } });
       const chnl = await prisma.channels.findUnique({ where: { id: parentMsg.channel_id }, select: { name: true, is_dm: true } });
-      cm.forEach(({ user_id }) => {
+      cm
+        .filter(({ user_id }) => Number(user_id) !== Number(userId))
+        .forEach(({ user_id }) => {
         io.to(`user_${user_id}`).emit("newThreadNotification", {
           channel_id: parentMsg.channel_id,
           channel_name: chnl?.name,
@@ -265,7 +267,7 @@ export const addThreadReply = async (req, res) => {
           preview: getPreviewText(content, files),
           created_at: new Date().toISOString()
         });
-      });
+        });
     }
 
     res.status(201).json({ success: true, data: broadcastData });

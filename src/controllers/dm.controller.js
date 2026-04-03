@@ -1,5 +1,6 @@
 import prisma from "../config/prisma.js";
 import { io } from "../sockets/index.js";
+import { withPresencePrivacy } from "../utils/userPreferences.js";
 
 export const createOrGetDM = async (req, res) => {
   const userId = req.user.id;
@@ -83,8 +84,18 @@ export const listMyDMs = async (req, res) => {
       },
     });
 
+    const otherUsers = dms
+      .map((dm) => dm.channel_members[0]?.users)
+      .filter(Boolean);
+    const sanitizedOtherUsers = await withPresencePrivacy(otherUsers, userId);
+    const sanitizedById = new Map(
+      sanitizedOtherUsers.map((entry) => [String(entry.id), entry])
+    );
+
     const formatted = dms.map((dm) => {
-      const otherUser = dm.channel_members[0]?.users;
+      const rawOtherUser = dm.channel_members[0]?.users;
+      const otherUser =
+        sanitizedById.get(String(rawOtherUser?.id)) ?? rawOtherUser;
       return {
         id: dm.id,
         other_user_id: otherUser?.id,
@@ -94,6 +105,7 @@ export const listMyDMs = async (req, res) => {
         status: otherUser?.status,
         is_online: !!otherUser?.is_online,
         last_seen: otherUser?.last_seen,
+        presence_hidden: !!otherUser?.presence_hidden,
         is_private: dm.is_private,
         is_dm: dm.is_dm,
       };

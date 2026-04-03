@@ -5,6 +5,10 @@ import socketAuthMiddleware from "./auth.middleware.js";
 import registerChannelSockets from "./channel.socket.js";
 import registerMessageSockets from "./message.socket.js";
 import registerConnectionHuddleSockets from "./huddleSocket.js";
+import {
+  buildPresenceEventPayload,
+  getStoredPreferencesForUser,
+} from "../utils/userPreferences.js";
 
 const userConnectionCounts = new Map();
 
@@ -32,11 +36,16 @@ async function persistPresence(userId, isOnline) {
     });
 
     if (io) {
-      io.emit("userPresenceChanged", {
-        userId: user.id,
-        is_online: !!user.is_online,
-        last_seen: user.last_seen,
-      });
+      const preferences = await getStoredPreferencesForUser(user.id);
+      io.emit(
+        "userPresenceChanged",
+        buildPresenceEventPayload({
+          userId: user.id,
+          isOnline: user.is_online,
+          lastSeen: user.last_seen,
+          privacyPreferences: preferences.privacyPreferences,
+        })
+      );
     }
   } catch (err) {
     console.error(`Failed to update presence for user ${userId}:`, err.message);

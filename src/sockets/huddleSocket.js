@@ -807,9 +807,11 @@ export default function registerConnectionHuddleSockets(io, socket) {
 
       socket.emit("huddleJoined", payload);
       io.to(`channel_${cid}`).emit("huddleStarted", payload);
-      userIds.forEach((userId) => {
+      userIds
+        .filter((userId) => Number(userId) !== Number(socket.user?.id))
+        .forEach((userId) => {
         io.to(`user_${userId}`).emit("huddleStarted", payload);
-      });
+        });
     } catch (err) {
       console.error("huddle-started error:", err.message);
       socket.emit("huddle-error", { error: "Failed to start huddle" });

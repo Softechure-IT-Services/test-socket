@@ -15,7 +15,7 @@ import {
 // Get all users
 router.get("/", verifyToken, async (req, res) => {
   try {
-    const users = await getAllUsers();
+    const users = await getAllUsers(req.user?.id ?? null);
     res.json(users);
   } catch (err) {
     console.error("Prisma error:", err);
@@ -27,7 +27,7 @@ router.get("/search", verifyToken, async (req, res) => {
   try {
     const { q = "", exclude } = req.query;
     // ← removed the early return on empty q
-    const users = await searchUsers(q, exclude);
+    const users = await searchUsers(q, exclude, req.user?.id ?? null);
     res.json(users);
   } catch (err) {
     console.error("Prisma error:", err);
@@ -43,7 +43,7 @@ router.get("/:userId", async (req, res) => {
     return res.status(400).json({ error: "Invalid user ID." });
   }
   try {
-    const user = await getUserById(id);
+    const user = await getUserById(id, req.user?.id ?? null);
     if (!user) return res.status(404).json({ error: "User not found" });
     res.json(user);
   } catch (err) {

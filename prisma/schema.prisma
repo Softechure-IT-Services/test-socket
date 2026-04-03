@@ -130,6 +130,8 @@ model users {
   password_resets password_reset_tokens[]
   status  String?  @db.VarChar(255)
   bio     String?  @db.Text
+  notification_preferences String? @db.Text
+  privacy_preferences      String? @db.Text
 }
 
 model password_reset_tokens {

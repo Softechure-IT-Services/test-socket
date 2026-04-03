@@ -14,6 +14,7 @@ import {
 import path from "path";
 import fs from "fs";
 import { getPreviewText } from "../utils/format.js";
+import { withPresencePrivacy } from "../utils/userPreferences.js";
 
 router.use(verifyToken);
 
@@ -167,6 +168,17 @@ const allUsers = await prisma.users.findMany({
   take: isDefault ? 10 : 30,
 });
 
+    const rawDmUsers = dmChannels
+      .map((channel) => channel.channel_members.find((member) => member.user_id !== userId)?.users)
+      .filter(Boolean);
+    const sanitizedPresenceUsers = await withPresencePrivacy(
+      [...rawDmUsers, ...allUsers],
+      userId
+    );
+    const sanitizedPresenceById = new Map(
+      sanitizedPresenceUsers.map((entry) => [String(entry.id), entry])
+    );
+
     const results = [];
 
     // Add channels
@@ -178,7 +190,9 @@ const allUsers = await prisma.users.findMany({
     const dmUserIds = new Set(); // track to avoid duplicating in user list
     for (const ch of dmChannels) {
       const otherMember = ch.channel_members.find((m) => m.user_id !== userId);
-      const otherUser = otherMember?.users;
+      const otherUser = otherMember?.users
+        ? sanitizedPresenceById.get(String(otherMember.users.id)) ?? otherMember.users
+        : null;
       if (!otherUser) continue;
       if (!query || otherUser.name.toLowerCase().includes(query)) {
         dmUserIds.add(otherUser.id);
@@ -190,6 +204,7 @@ const allUsers = await prisma.users.findMany({
           avatar_url: otherUser.avatar_url ?? null,
           is_online: !!otherUser.is_online,
           last_seen: otherUser.last_seen,
+          presence_hidden: !!otherUser.presence_hidden,
         });
       }
     }
@@ -197,14 +212,16 @@ const allUsers = await prisma.users.findMany({
     // Add all users NOT already represented by a DM above
     for (const u of allUsers) {
       if (dmUserIds.has(u.id)) continue; // already shown via DM channel
+      const sanitizedUser = sanitizedPresenceById.get(String(u.id)) ?? u;
       results.push({
-        id: u.id,
-        name: u.name,
+        id: sanitizedUser.id,
+        name: sanitizedUser.name,
         kind: "user",
-        userId: u.id,
-        avatar_url: u.avatar_url ?? null,
-        is_online: !!u.is_online,
-        last_seen: u.last_seen,
+        userId: sanitizedUser.id,
+        avatar_url: sanitizedUser.avatar_url ?? null,
+        is_online: !!sanitizedUser.is_online,
+        last_seen: sanitizedUser.last_seen,
+        presence_hidden: !!sanitizedUser.presence_hidden,
       });
     }
 
@@ -463,6 +480,7 @@ router.get("/:channelId/messages", async (req, res) => {
 router.get("/:channelId/members", async (req, res) => {
   try {
     const channelId = Number(req.params.channelId);
+    const viewerUserId = req.user.id;
 
     const channel = await prisma.channels.findUnique({
       where: { id: channelId },
@@ -493,9 +511,14 @@ router.get("/:channelId/members", async (req, res) => {
       },
     });
 
+    const sanitizedMembers = await withPresencePrivacy(
+      members.map((member) => member.users),
+      viewerUserId
+    );
+
     res.json({
       channel,
-      members: members.map((m) => m.users),
+      members: sanitizedMembers,
     });
   } catch (err) {
     console.error(err);
@@ -548,6 +571,8 @@ router.post("/:channelId/members", async (req, res) => {
         last_seen: true,
       },
     });
+    const [newMemberForOthers] = await withPresencePrivacy([newMember], requesterId);
+    const [newMemberForSelf] = await withPresencePrivacy([newMember], Number(userId));
 
     const requester = await prisma.users.findUnique({
       where: { id: requesterId },
@@ -587,7 +612,7 @@ router.post("/:channelId/members", async (req, res) => {
     // Notify everyone in the channel — member list should refresh
     io.to(`channel_${channelId}`).emit("memberAdded", {
       channelId,
-      member: newMember,
+      member: newMemberForOthers,
     });
 
     // ─── Notify the added user: channel appears in their sidebar ────
@@ -600,10 +625,10 @@ router.post("/:channelId/members", async (req, res) => {
       channelId,
       channelName: channel.name,
       channel: fullChannel, // full channel data for sidebar
-      member: newMember,
+      member: newMemberForSelf,
     });
 
-    res.json({ success: true, member: newMember });
+    res.json({ success: true, member: newMemberForSelf });
   } catch (err) {
     console.error("Add member error:", err);
     res.status(500).json({ error: "DB Error" });
@@ -771,18 +796,20 @@ router.post("/:channelId/join", async (req, res) => {
         last_seen: true,
       },
     });
+    const [joiningUserForSelf] = await withPresencePrivacy([joiningUser], userId);
+    const [joiningUserForOthers] = await withPresencePrivacy([joiningUser], null);
 
     io.to(`user_${userId}`).emit("addedToChannel", {
       channelId,
       channelName: channel.name,
       channel: fullChannel,
-      member: joiningUser,
+      member: joiningUserForSelf,
     });
 
     // Notify existing channel members to refresh their member list silently
     io.to(`channel_${channelId}`).emit("memberAdded", {
       channelId,
-      member: joiningUser,
+      member: joiningUserForOthers,
     });
 
     res.json({ success: true, channel: fullChannel });
@@ -842,10 +869,14 @@ router.get("/:id", async (req, res) => {
           },
         },
       });
+      const [sanitizedDmUser] = await withPresencePrivacy(
+        dmUser?.users ? [dmUser.users] : [],
+        userId
+      );
 
       return res.json({
         channel,
-        dm_user: dmUser?.users ?? null,
+        dm_user: sanitizedDmUser ?? null,
         is_member: true,
       });
     }
@@ -882,7 +913,10 @@ router.get("/:id", async (req, res) => {
 
     res.json({
       channel,
-      members: members.map((m) => m.users),
+      members: await withPresencePrivacy(
+        members.map((m) => m.users),
+        userId
+      ),
       is_member: userIsMember,
     });
   } catch (err) {

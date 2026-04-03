@@ -1,11 +1,12 @@
 // controllers/user.controller.js
 import prisma from "../config/prisma.js";
+import { withPresencePrivacy } from "../utils/userPreferences.js";
 
 /**
  * Get all users
  */
-export const getAllUsers = async () => {
-  return prisma.users.findMany({
+export const getAllUsers = async (viewerUserId = null) => {
+  const users = await prisma.users.findMany({
     select: {
       id: true,
       external_id: true,
@@ -20,14 +21,15 @@ export const getAllUsers = async () => {
       updated_at: true,
     },
   });
+  return withPresencePrivacy(users, viewerUserId);
 };
 
 /**
  * Get a single user by ID
  * @param {number} userId
  */
-export const getUserById = async (userId) => {
-  return prisma.users.findUnique({
+export const getUserById = async (userId, viewerUserId = null) => {
+  const user = await prisma.users.findUnique({
     where: { id: Number(userId) },
     select: {
       id: true,
@@ -42,18 +44,21 @@ export const getUserById = async (userId) => {
       updated_at: true,
     },
   });
+  if (!user) return null;
+  const [sanitizedUser] = await withPresencePrivacy([user], viewerUserId);
+  return sanitizedUser;
 };
 
 /**
  * Search users by name, optionally exclude one user
  */
-export const searchUsers = async (q, exclude) => {
+export const searchUsers = async (q, exclude, viewerUserId = null) => {
   const where = {
     name: { contains: q },
   };
   if (exclude) where.id = { not: Number(exclude) };
 
-  return prisma.users.findMany({
+  const users = await prisma.users.findMany({
     where,
     select: {
       id: true,
@@ -65,6 +70,7 @@ export const searchUsers = async (q, exclude) => {
     take: 20,
     orderBy: { name: "asc" },
   });
+  return withPresencePrivacy(users, viewerUserId);
 };
 
 /**

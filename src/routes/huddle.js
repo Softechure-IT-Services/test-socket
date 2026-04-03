@@ -252,9 +252,11 @@ router.post("/channel/:channelId/start", authenticateToken, async (req, res) => 
 
     if (io) {
       io.to(`channel_${channelId}`).emit("huddleStarted", payload);
-      memberIds.forEach((uid) => {
+      memberIds
+        .filter((uid) => Number(uid) !== startedBy)
+        .forEach((uid) => {
         io.to(`user_${uid}`).emit("huddleStarted", payload);
-      });
+        });
     }
 
     return res.status(created ? 201 : 200).json({
