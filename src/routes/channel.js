@@ -117,8 +117,6 @@ router.get("/search-user-and-channel", async (req, res) => {
     const query = typeof rawQuery === "string" ? rawQuery.toLowerCase().trim() : "";
     const isDefault = !query; // no search term = show default list
 
-
-
     // ── 2. Existing DM channels ─────────────────────────────────────────────
     const dmChannels = await prisma.channels.findMany({
       where: {
@@ -131,42 +129,41 @@ router.get("/search-user-and-channel", async (req, res) => {
       orderBy: { created_at: "desc" },
     });
 
-
-
     // Channels query — remove mode
-const channels = await prisma.channels.findMany({
-  where: {
-    is_dm: false,
-    ...(query
-      ? { name: { contains: query } }  // ← remove mode: "insensitive"
-      : {}),
-    OR: [
-      { is_private: false },
-      { channel_members: { some: { user_id: userId } } },
-    ],
-  },
-  orderBy: { created_at: "desc" },
-  take: isDefault ? 10 : 20,
-});
+    const channels = await prisma.channels.findMany({
+      where: {
+        is_dm: false,
+        ...(query
+          ? { name: { contains: query } }  // ← remove mode: "insensitive"
+          : {}),
+        OR: [
+          { is_private: false },
+          { channel_members: { some: { user_id: userId } } },
+        ],
+      },
+      orderBy: { created_at: "desc" },
+      take: isDefault ? 10 : 20,
+    });
 
-// Users query — remove mode there too
-const allUsers = await prisma.users.findMany({
-  where: {
-    id: { not: userId },
-    ...(query
-      ? { name: { contains: query } }  // ← remove mode: "insensitive"
-      : {}),
-  },
-  select: {
-    id: true,
-    name: true,
-    avatar_url: true,
-    is_online: true,
-    last_seen: true,
-  },
-  orderBy: { name: "asc" },
-  take: isDefault ? 10 : 30,
-});
+    // Users query — remove mode there too
+    const allUsers = await prisma.users.findMany({
+      where: {
+        id: { not: userId },
+        ...(query
+          ? { name: { contains: query } }  // ← remove mode: "insensitive"
+          : {}),
+      },
+      select: {
+        id: true,
+        name: true,
+        avatar_url: true,
+        is_online: true,
+        is_huddling: true,
+        last_seen: true,
+      },
+      orderBy: { name: "asc" },
+      take: isDefault ? 10 : 30,
+    });
 
     const rawDmUsers = dmChannels
       .map((channel) => channel.channel_members.find((member) => member.user_id !== userId)?.users)
@@ -179,11 +176,23 @@ const allUsers = await prisma.users.findMany({
       sanitizedPresenceUsers.map((entry) => [String(entry.id), entry])
     );
 
+    // Check for active huddle sessions
+    const activeSessions = await prisma.huddleSession.findMany({
+      where: { ended_at: null },
+      select: { channel_id: true }
+    });
+    const activeChannelIds = new Set(activeSessions.map(s => s.channel_id).filter(id => id != null));
+
     const results = [];
 
     // Add channels
     for (const ch of channels) {
-      results.push({ id: ch.id, name: ch.name, kind: "channel" });
+      results.push({ 
+        id: ch.id, 
+        name: ch.name, 
+        kind: "channel",
+        has_active_huddle: activeChannelIds.has(ch.id)
+      });
     }
 
     // Add DMs — only if the other user's name matches (or no query)
@@ -203,6 +212,7 @@ const allUsers = await prisma.users.findMany({
           userId: otherUser.id,
           avatar_url: otherUser.avatar_url ?? null,
           is_online: !!otherUser.is_online,
+          is_huddling: !!otherUser.is_huddling,
           last_seen: otherUser.last_seen,
           presence_hidden: !!otherUser.presence_hidden,
         });
@@ -220,6 +230,7 @@ const allUsers = await prisma.users.findMany({
         userId: sanitizedUser.id,
         avatar_url: sanitizedUser.avatar_url ?? null,
         is_online: !!sanitizedUser.is_online,
+        is_huddling: !!sanitizedUser.is_huddling,
         last_seen: sanitizedUser.last_seen,
         presence_hidden: !!sanitizedUser.presence_hidden,
       });
@@ -263,7 +274,19 @@ router.get("/", async (req, res) => {
       },
     });
 
-    res.json(channels);
+    // Check for active huddle sessions
+    const activeSessions = await prisma.huddleSession.findMany({
+      where: { ended_at: null },
+      select: { channel_id: true }
+    });
+    const activeChannelIds = new Set(activeSessions.map(s => s.channel_id).filter(id => id != null));
+
+    const formattedChannels = channels.map(ch => ({
+      ...ch,
+      has_active_huddle: activeChannelIds.has(ch.id)
+    }));
+
+    res.json(formattedChannels);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "DB Error" });
@@ -290,41 +313,9 @@ router.get("/:channelId/messages", async (req, res) => {
       if (!isMember) return res.status(403).json({ error: "You are not a member of this channel" });
     }
 
-    // NOTE: We intentionally do NOT auto-join public channels here.
-    // Auto-joining on message fetch would silently undo a deliberate leave action.
-    // Membership is only created when the user explicitly clicks "Join Channel"
-    // via POST /:channelId/join.
-  // const channelId = Number(req.params.channelId);
-  const limit = Number(req.query.limit) || 20;
-  const cursor = req.query.cursor ? Number(req.query.cursor) : null;
-  const after  = req.query.after  ? Number(req.query.after)  : null;
-
-  // try {
-  //   const channel = await prisma.channels.findUnique({
-  //     where: { id: channelId },
-  //     select: { is_private: true },
-  //   });
-
-  //   if (!channel) {
-  //     return res.status(404).json({ error: "Channel not found" });
-  //   }
-
-  //   if (channel.is_private) {
-  //     const isMember = await prisma.channel_members.findUnique({
-  //       where: {
-  //         channel_id_user_id: {
-  //           channel_id: channelId,
-  //           user_id: userId,
-  //         },
-  //       },
-  //     });
-
-  //     if (!isMember) {
-  //       return res
-  //         .status(403)
-  //         .json({ error: "You are not a member of this channel" });
-  //     }
-  //   }
+    const limit = Number(req.query.limit) || 20;
+    const cursor = req.query.cursor ? Number(req.query.cursor) : null;
+    const after  = req.query.after  ? Number(req.query.after)  : null;
 
     const messages = await prisma.messages.findMany({
       where: {
@@ -348,7 +339,6 @@ router.get("/:channelId/messages", async (req, res) => {
       take: limit,
     });
 
-    // Batch-fetch thread counts for all fetched messages in one query
     const messageIds = messages.map((m) => m.id);
     const threads = await prisma.threads.findMany({
       where: { parent_message_id: { in: messageIds } },
@@ -361,11 +351,6 @@ router.get("/:channelId/messages", async (req, res) => {
       threads.map((t) => [t.parent_message_id, t._count.messages])
     );
 
-    // ── Parse & hydrate reactions ────────────────────────────────────────────
-    // The DB stores reactions as a JSON string with bare user IDs in the users
-    // array: [{ emoji, count, users: ["5", "12"] }].
-    // We need to hydrate those IDs into { id, name } objects — the same shape
-    // the socket path produces — so the tooltip always shows real names.
     const allRawReactions = messages.map((m) => {
       try { return JSON.parse(m.reactions || "[]"); } catch { return []; }
     });
@@ -380,7 +365,6 @@ router.get("/:channelId/messages", async (req, res) => {
       })
     );
 
-    // Collect every unique user ID referenced in any reaction across all messages
     const reactionUserIds = new Set();
     for (const rxList of normalizedReactions) {
       for (const rx of rxList) {
@@ -390,7 +374,6 @@ router.get("/:channelId/messages", async (req, res) => {
       }
     }
 
-    // Single batch lookup for all reaction users
     const reactionUsers = reactionUserIds.size > 0
       ? await prisma.users.findMany({
           where: { id: { in: [...reactionUserIds] } },
@@ -401,7 +384,6 @@ router.get("/:channelId/messages", async (req, res) => {
       reactionUsers.map((u) => [u.id, u.username || u.name || "Unknown"])
     );
 
-    // Build hydrated reactions arrays indexed by message position
     const hydratedReactionsById = new Map();
     messages.forEach((m, i) => {
       const hydrated = normalizedReactions[i].map((rx, rxIndex) => ({
@@ -458,7 +440,6 @@ router.get("/:channelId/messages", async (req, res) => {
         };
       });
 
-    // Desc-order results need reversing to chronological; asc (after-query) are already correct
     if (!after) formatted.reverse();
 
     const nextCursor =
@@ -505,6 +486,7 @@ router.get("/:channelId/members", async (req, res) => {
             email: true,
             avatar_url: true,
             is_online: true,
+            is_huddling: true,
             last_seen: true,
           },
         },
@@ -526,7 +508,6 @@ router.get("/:channelId/members", async (req, res) => {
   }
 });
 
-// ─── Add a member to a private channel (creator only) ─────────────────────────
 router.post("/:channelId/members", async (req, res) => {
   const channelId = Number(req.params.channelId);
   const requesterId = req.user.id;
@@ -568,6 +549,7 @@ router.post("/:channelId/members", async (req, res) => {
         email: true,
         avatar_url: true,
         is_online: true,
+        is_huddling: true,
         last_seen: true,
       },
     });
@@ -579,7 +561,6 @@ router.post("/:channelId/members", async (req, res) => {
       select: { name: true },
     });
 
-    // Create a system message for the channel
     const systemMessage = await prisma.messages.create({
       data: {
         channel_id: channelId,
@@ -606,17 +587,13 @@ router.post("/:channelId/members", async (req, res) => {
       is_system: true,
     };
 
-    // Emit system message to channel
     io.to(`channel_${channelId}`).emit("receiveMessage", systemPayload);
 
-    // Notify everyone in the channel — member list should refresh
     io.to(`channel_${channelId}`).emit("memberAdded", {
       channelId,
       member: newMemberForOthers,
     });
 
-    // ─── Notify the added user: channel appears in their sidebar ────
-    // Build the full channel object so their sidebar can add it
     const fullChannel = await prisma.channels.findUnique({
       where: { id: channelId },
     });
@@ -624,9 +601,19 @@ router.post("/:channelId/members", async (req, res) => {
     io.to(`user_${userId}`).emit("addedToChannel", {
       channelId,
       channelName: channel.name,
-      channel: fullChannel, // full channel data for sidebar
+      channel: fullChannel,
       member: newMemberForSelf,
     });
+
+    // Force the new member's sockets to join the channel room for instant updates
+    try {
+      const targetUserSockets = await io.in(`user_${userId}`).fetchSockets();
+      for (const s of targetUserSockets) {
+        s.join(`channel_${channelId}`);
+      }
+    } catch (socketErr) {
+      console.error("Failed to join user to socket room on member add:", socketErr);
+    }
 
     res.json({ success: true, member: newMemberForSelf });
   } catch (err) {
@@ -635,7 +622,6 @@ router.post("/:channelId/members", async (req, res) => {
   }
 });
 
-// ─── Remove a member from a private channel (creator only) ────────────────────
 router.delete("/:channelId/members/:targetUserId", async (req, res) => {
   const channelId = Number(req.params.channelId);
   const targetUserId = Number(req.params.targetUserId);
@@ -679,7 +665,6 @@ router.delete("/:channelId/members/:targetUserId", async (req, res) => {
       },
     });
 
-    // Create a system message for the channel
     const systemMessage = await prisma.messages.create({
       data: {
         channel_id: channelId,
@@ -706,23 +691,19 @@ router.delete("/:channelId/members/:targetUserId", async (req, res) => {
       is_system: true,
     };
 
-    // Emit system message to everyone still in the channel
     io.to(`channel_${channelId}`).emit("receiveMessage", systemPayload);
 
-    // ─── Tell remaining members to update their member list ─────────
     io.to(`channel_${channelId}`).emit("memberRemoved", {
       channelId,
       userId: targetUserId,
       userName: targetUser?.name ?? null,
     });
 
-    // ─── Tell the removed user: channel disappears from sidebar ─────
     io.to(`user_${targetUserId}`).emit("removedFromChannel", {
       channelId,
       channelName: channel.name,
     });
 
-    // Force the removed user out of the socket room
     try {
       const removedUserSockets = await io
         .in(`user_${targetUserId}`)
@@ -775,12 +756,10 @@ router.post("/:channelId/join", async (req, res) => {
       },
     });
 
-    // Clear any 'left' record so the user is treated as a participant again
     await prisma.channel_left.deleteMany({
       where: { channel_id: channelId, user_id: userId },
     });
 
-    // Notify the joining user so their sidebar shows the channel
     const fullChannel = await prisma.channels.findUnique({
       where: { id: channelId },
     });
@@ -793,6 +772,7 @@ router.post("/:channelId/join", async (req, res) => {
         email: true,
         avatar_url: true,
         is_online: true,
+        is_huddling: true,
         last_seen: true,
       },
     });
@@ -806,7 +786,16 @@ router.post("/:channelId/join", async (req, res) => {
       member: joiningUserForSelf,
     });
 
-    // Notify existing channel members to refresh their member list silently
+    // Force the joining user's sockets to join the channel room for instant updates
+    try {
+      const joiningUserSockets = await io.in(`user_${userId}`).fetchSockets();
+      for (const s of joiningUserSockets) {
+        s.join(`channel_${channelId}`);
+      }
+    } catch (socketErr) {
+      console.error("Failed to join user to socket room on channel join:", socketErr);
+    }
+
     io.to(`channel_${channelId}`).emit("memberAdded", {
       channelId,
       member: joiningUserForOthers,
@@ -864,6 +853,7 @@ router.get("/:id", async (req, res) => {
               name: true,
               avatar_url: true,
               is_online: true,
+              is_huddling: true,
               last_seen: true,
             },
           },
@@ -891,16 +881,13 @@ router.get("/:id", async (req, res) => {
             email: true,
             avatar_url: true,
             is_online: true,
+            is_huddling: true,
             last_seen: true,
           },
         },
       },
     });
 
-
-    // For public channels: a user is a member UNLESS they have explicitly left.
-    // We track deliberate leaves in channel_left so we can distinguish
-    // 'never joined' (allowed) from 'left on purpose' (blocked).
     let userIsMember;
     if (channel.is_private) {
       userIsMember = members.some((m) => m.users && String(m.users.id) === String(userId));
@@ -974,7 +961,7 @@ router.post("/:channelId/pin/:messageId", async (req, res) => {
     await prisma.messages.update({
       where: { id: messageId },
       data: {
-        pinned: "1",
+        pinned: true,
       },
     });
 
@@ -1000,7 +987,7 @@ router.delete("/:channelId/pin/:messageId", async (req, res) => {
         channel_id: channelId,
       },
       include: {
-        channels: {
+        channel: {
           select: { created_by: true },
         },
       },
@@ -1012,19 +999,15 @@ router.delete("/:channelId/pin/:messageId", async (req, res) => {
         .json({ error: "Message not pinned or not found" });
     }
 
-    if (
-      String(message.pinned_by) !== String(userId) &&
-      String(message.channels.created_by) !== String(userId)
-    ) {
-      return res.status(403).json({ error: "Not allowed to unpin" });
+    // Logic for who can unpin (placeholder logic based on available fields)
+    if (String(message.channel.created_by) !== String(userId) && String(message.sender_id) !== String(userId)) {
+       return res.status(403).json({ error: "Not allowed to unpin" });
     }
 
     await prisma.messages.update({
       where: { id: messageId },
       data: {
-        pinned: null,
-        pinned_by: null,
-        pinned_at: null,
+        pinned: false,
       },
     });
 
@@ -1045,14 +1028,10 @@ router.get("/:channelId/pins", (req, res) => {
       m.sender_id,
       u.name AS sender_name,
       u.avatar_url,
-      m.pinned_by,
-      p.name AS pinner_name,
-      m.pinned_at
+      m.pinned
     FROM messages m
     JOIN users u ON u.id = m.sender_id
-    LEFT JOIN users p ON p.id = m.pinned_by
     WHERE m.channel_id = ? AND m.pinned = 1
-    ORDER BY m.pinned_at DESC
   `;
   db.query(sql, [channelId], (err, rows) => {
     if (err) return res.status(500).json({ error: "DB Error" });
@@ -1091,14 +1070,10 @@ router.post("/:channelId/leave", async (req, res) => {
       },
     });
 
-    // For private channels: must have a membership row to leave.
     if (!membership && channel.is_private) {
       return res.status(400).json({ error: "You are not a member of this channel" });
     }
 
-    // For public channels: record the deliberate leave in channel_left
-    // regardless of whether a channel_members row exists.
-    // This is how we distinguish 'left on purpose' from 'never joined'.
     if (!channel.is_private) {
       await prisma.channel_left.upsert({
         where: { channel_id_user_id: { channel_id: channelId, user_id: userId } },
@@ -1112,7 +1087,6 @@ router.post("/:channelId/leave", async (req, res) => {
       select: { name: true },
     });
 
-    // Only delete the channel_members row if one exists
     if (membership) {
       await prisma.channel_members.delete({
         where: {
@@ -1124,7 +1098,6 @@ router.post("/:channelId/leave", async (req, res) => {
       });
     }
 
-    // Create system message
     const systemMessage = await prisma.messages.create({
       data: {
         channel_id: channelId,
@@ -1153,7 +1126,6 @@ router.post("/:channelId/leave", async (req, res) => {
 
     io.to(`channel_${channelId}`).emit("receiveMessage", systemPayload);
 
-    // Tell remaining members to update their member list
     io.to(`channel_${channelId}`).emit("memberRemoved", {
       channelId,
       userId,
@@ -1175,7 +1147,6 @@ router.post("/:channelId/leave", async (req, res) => {
       userId,
     });
 
-    // Force user out of socket room
     try {
       const userSockets = await io.in(`user_${userId}`).fetchSockets();
       for (const s of userSockets) {
@@ -1215,8 +1186,6 @@ router.get("/files/:fileId/download", async (req, res) => {
       select: { is_private: true },
     });
 
-    // Public channels: any authenticated user may download files.
-    // Private channels: enforce membership.
     if (fileChannel?.is_private) {
       const isMember = await prisma.channel_members.findFirst({
         where: { channel_id: file.channel_id, user_id: userId },

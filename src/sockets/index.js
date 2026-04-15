@@ -9,6 +9,7 @@ import {
   buildPresenceEventPayload,
   getStoredPreferencesForUser,
 } from "../utils/userPreferences.js";
+import { persistPresence, persistHuddleStatus } from "./presenceManager.js";
 
 const userConnectionCounts = new Map();
 
@@ -17,39 +18,6 @@ export let io;
 function parseUserId(rawId) {
   const id = Number(rawId);
   return Number.isFinite(id) ? id : null;
-}
-
-async function persistPresence(userId, isOnline) {
-  try {
-    const user = await prisma.users.update({
-      where: { id: userId },
-      data: {
-        is_online: isOnline,
-        last_seen: new Date(),
-        updated_at: new Date(),
-      },
-      select: {
-        id: true,
-        is_online: true,
-        last_seen: true,
-      },
-    });
-
-    if (io) {
-      const preferences = await getStoredPreferencesForUser(user.id);
-      io.emit(
-        "userPresenceChanged",
-        buildPresenceEventPayload({
-          userId: user.id,
-          isOnline: user.is_online,
-          lastSeen: user.last_seen,
-          privacyPreferences: preferences.privacyPreferences,
-        })
-      );
-    }
-  } catch (err) {
-    console.error(`Failed to update presence for user ${userId}:`, err.message);
-  }
 }
 
 function trackUserConnection(userId) {
@@ -99,7 +67,7 @@ export function initSocket(server) {
 
   io.use(socketAuthMiddleware);
 
-  io.on("connection", (socket) => {
+  io.on("connection", async (socket) => {
     const isGuest = !!socket.user?.guest;
     console.log("✅ User Connected:", socket.id, "user:", isGuest ? "guest" : socket.user?.id);
 
@@ -108,6 +76,19 @@ export function initSocket(server) {
       socket.emit("auth-success", { user: socket.user });
 
       trackUserConnection(socket.user?.id);
+
+      // Join all channel rooms for instant sidebar updates
+      try {
+        const memberships = await prisma.channel_members.findMany({
+          where: { user_id: socket.user.id },
+          select: { channel_id: true },
+        });
+        memberships.forEach((m) => {
+          socket.join(`channel_${m.channel_id}`);
+        });
+      } catch (err) {
+        console.error("Failed to join channel rooms on connect:", err.message);
+      }
 
       socket.on("disconnect", () => {
         releaseUserConnection(socket.user?.id);

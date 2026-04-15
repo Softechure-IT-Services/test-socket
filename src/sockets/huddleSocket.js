@@ -168,6 +168,7 @@
 // sockets/connection.huddle.js
 
 import prisma from "../config/prisma.js";
+import { persistHuddleStatus } from "./presenceManager.js";
 
 const users = new Map();
 const roomParticipants = new Map(); // roomId -> Set<socketId>
@@ -394,6 +395,11 @@ function leaveTrackedRoom(io, socket, roomId, options = {}) {
     if (user.room === roomId) user.room = null;
   }
 
+  // ✅ Persist huddle status in DB (leaving huddle)
+  if (user?.userId) {
+    void persistHuddleStatus(user.userId, false);
+  }
+
   if (!skipLeave) {
     socket.leave(roomId);
   }
@@ -419,6 +425,7 @@ export default function registerConnectionHuddleSockets(io, socket) {
     username: null,
     inCall: false,
     room: null,
+    previewingRoom: null, // NEW: track lobby/preview state
   });
 
   socket.on("set-username", (username) => {
@@ -470,6 +477,11 @@ export default function registerConnectionHuddleSockets(io, socket) {
   });
 
   socket.on("huddle-room-preview", async ({ roomId } = {}, ack) => {
+    const user = users.get(socket.id);
+    if (user && roomId) {
+      user.previewingRoom = roomId;
+    }
+
     if (!roomId) {
       ack?.({
         roomId: null,
@@ -712,7 +724,13 @@ export default function registerConnectionHuddleSockets(io, socket) {
 
     if (user) {
       user.room = roomId;
+      user.previewingRoom = null; // Clear preview: they have officially joined
       user.inCall = true;
+    }
+
+    // ✅ Persist huddle status in DB (joining huddle)
+    if (user?.userId) {
+      void persistHuddleStatus(user.userId, true);
     }
 
     socket.join(roomId);
@@ -874,7 +892,28 @@ export default function registerConnectionHuddleSockets(io, socket) {
 
     const user = users.get(socket.id);
     if (user?.room) {
+      // ✅ Persist huddle status in DB on disconnect if they were in a huddle
+      if (user.userId) {
+        void persistHuddleStatus(user.userId, false);
+      }
       leaveTrackedRoom(io, socket, user.room, { skipLeave: true });
+    } else if (user?.previewingRoom) {
+      // ✅ Admin closed the lobby without joining: check if empty and end it
+      const lastRoomId = user.previewingRoom;
+      void (async () => {
+        try {
+          const access = await getRoomAccessState(lastRoomId, user.userId);
+          if (access.isAdmin) {
+            const participants = roomParticipants.get(lastRoomId);
+            if (!participants || participants.size === 0) {
+              console.log(`🗑️ Huddle ${lastRoomId} lobby closed by admin (empty): ending session.`);
+              void markRoomEndedIfEmpty(io, lastRoomId);
+            }
+          }
+        } catch (err) {
+          /* ignore error on disconnect cleanup */
+        }
+      })();
     }
 
     removePendingRequestsForSocket(socket.id).forEach((roomId) => {

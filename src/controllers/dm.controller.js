@@ -1,3 +1,4 @@
+// dm.controller.js
 import prisma from "../config/prisma.js";
 import { io } from "../sockets/index.js";
 import { withPresencePrivacy } from "../utils/userPreferences.js";
@@ -76,6 +77,7 @@ export const listMyDMs = async (req, res) => {
                 avatar_url: true,
                 status:true,
                 is_online: true,
+                is_huddling: true, // ✅ Include huddling status
                 last_seen: true,
               },
             },
@@ -104,6 +106,7 @@ export const listMyDMs = async (req, res) => {
         avatar_url: otherUser?.avatar_url,
         status: otherUser?.status,
         is_online: !!otherUser?.is_online,
+        is_huddling: !!otherUser?.is_huddling,
         last_seen: otherUser?.last_seen,
         presence_hidden: !!otherUser?.presence_hidden,
         is_private: dm.is_private,

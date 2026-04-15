@@ -110,6 +110,7 @@ import express from "express";
 import { PrismaClient } from "@prisma/client";
 import authenticateToken from "../middleware/auth.js";
 import { io } from "../sockets/index.js";
+import { persistHuddleStatus } from "../sockets/presenceManager.js";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -318,6 +319,11 @@ router.patch("/session/:meeting_id/end", authenticateToken, async (req, res) => 
   const { meeting_id } = req.params;
 
   try {
+    const session = await prisma.huddleSession.findUnique({
+      where: { meeting_id },
+      select: { channel_id: true },
+    });
+
     const result = await prisma.huddleSession.updateMany({
       where: { meeting_id, ended_at: null },
       data: { ended_at: new Date() },
@@ -327,9 +333,134 @@ router.patch("/session/:meeting_id/end", authenticateToken, async (req, res) => 
       return res.status(404).json({ error: "Session not found or already ended" });
     }
 
+    if (session?.channel_id && io) {
+      const members = await prisma.channel_members.findMany({
+        where: { channel_id: session.channel_id },
+        select: { user_id: true },
+      });
+      const memberIds = members.map((m) => m.user_id).filter((id) => id != null);
+
+      io.to(`channel_${session.channel_id}`).emit("huddleEnded", {
+        channel_id: session.channel_id,
+        meeting_id,
+      });
+
+      memberIds.forEach((uid) => {
+        io.to(`user_${uid}`).emit("huddleEnded", {
+          channel_id: session.channel_id,
+          meeting_id,
+        });
+      });
+    }
+
     return res.status(200).json({ message: "Session ended" });
   } catch (err) {
     console.error("PATCH /huddle/session/:meeting_id/end error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /huddle/channel/:channelId/stop
+ * Terminates the current huddle for a channel.
+ */
+router.post("/channel/:channelId/stop", authenticateToken, async (req, res) => {
+  const channelId = Number(req.params.channelId);
+  console.log(`[Huddle] POST /channel/${channelId}/stop hit`);
+  if (!Number.isFinite(channelId)) {
+    return res.status(400).json({ error: "Invalid channel id" });
+  }
+
+  try {
+    console.log(`[Huddle] Seeking active session for channel ${channelId}`);
+    const session = await prisma.huddleSession.findFirst({
+      where: { channel_id: channelId, ended_at: null },
+      orderBy: { started_at: "desc" },
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: "No active huddle found for this channel" });
+    }
+
+    await prisma.huddleSession.update({
+      where: { id: session.id },
+      data: { ended_at: new Date() },
+    });
+
+    if (io) {
+      const members = await prisma.channel_members.findMany({
+        where: { channel_id: channelId },
+        select: { user_id: true },
+      });
+      const memberIds = members.map((m) => m.user_id).filter((id) => id != null);
+
+      io.to(`channel_${channelId}`).emit("huddleEnded", {
+        channel_id: channelId,
+        meeting_id: session.meeting_id,
+      });
+
+      memberIds.forEach((uid) => {
+        io.to(`user_${uid}`).emit("huddleEnded", {
+          channel_id: channelId,
+          meeting_id: session.meeting_id,
+        });
+      });
+    }
+
+    return res.status(200).json({ success: true, message: "Huddle ended" });
+  } catch (err) {
+    console.error("POST /huddle/channel/:channelId/stop error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /huddle/channel/:channelId/end (Alias for stop)
+ */
+router.post("/channel/:channelId/end", authenticateToken, async (req, res) => {
+  const channelId = Number(req.params.channelId);
+  if (!Number.isFinite(channelId)) {
+    return res.status(400).json({ error: "Invalid channel id" });
+  }
+
+  try {
+    const session = await prisma.huddleSession.findFirst({
+      where: { channel_id: channelId, ended_at: null },
+      orderBy: { started_at: "desc" },
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: "No active huddle found for this channel" });
+    }
+
+    await prisma.huddleSession.update({
+      where: { id: session.id },
+      data: { ended_at: new Date() },
+    });
+
+    if (io) {
+      const members = await prisma.channel_members.findMany({
+        where: { channel_id: channelId },
+        select: { user_id: true },
+      });
+      const memberIds = members.map((m) => m.user_id).filter((id) => id != null);
+
+      io.to(`channel_${channelId}`).emit("huddleEnded", {
+        channel_id: channelId,
+        meeting_id: session.meeting_id,
+      });
+
+      memberIds.forEach((uid) => {
+        io.to(`user_${uid}`).emit("huddleEnded", {
+          channel_id: channelId,
+          meeting_id: session.meeting_id,
+        });
+      });
+    }
+
+    return res.status(200).json({ success: true, message: "Huddle ended" });
+  } catch (err) {
+    console.error("POST /huddle/channel/:channelId/end error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -396,6 +527,44 @@ router.post("/instant", authenticateToken, async (req, res) => {
     });
   } catch (err) {
     console.error("POST /huddle/instant error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /huddle/join
+ * Formally marks the user as 'huddling' in the database and broadcasts the status.
+ */
+router.post("/join", authenticateToken, async (req, res) => {
+  const userId = Number(req.user?.id);
+  if (!Number.isFinite(userId)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    await persistHuddleStatus(userId, true);
+    return res.status(200).json({ success: true, message: "Joined huddle" });
+  } catch (err) {
+    console.error("POST /huddle/join error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /huddle/leave
+ * Formally marks the user as 'not huddling' in the database and broadcasts the status.
+ */
+router.post("/leave", authenticateToken, async (req, res) => {
+  const userId = Number(req.user?.id);
+  if (!Number.isFinite(userId)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    await persistHuddleStatus(userId, false);
+    return res.status(200).json({ success: true, message: "Left huddle" });
+  } catch (err) {
+    console.error("POST /huddle/leave error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
 });

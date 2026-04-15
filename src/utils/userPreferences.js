@@ -222,6 +222,7 @@ export async function withPresencePrivacy(users, viewerUserId = null) {
 export function buildPresenceEventPayload({
   userId,
   isOnline,
+  is_huddling,
   lastSeen,
   privacyPreferences,
 }) {
@@ -231,6 +232,7 @@ export function buildPresenceEventPayload({
     return {
       userId,
       is_online: !!isOnline,
+      is_huddling: !!is_huddling, // Correctly use is_huddling parameter
       last_seen: lastSeen ?? null,
       presence_hidden: false,
     };

@@ -118,6 +118,7 @@ model users {
   email           String            @unique(map: "email") @db.VarChar(255)
   avatar_url      String?           @db.Text
   is_online       Boolean?          @default(false)
+  is_huddling     Boolean?          @default(false)
   last_seen       DateTime?         @db.DateTime(0)
   created_at      DateTime?         @default(now()) @db.DateTime(0)
   updated_at      DateTime?         @default(now()) @db.DateTime(0)
