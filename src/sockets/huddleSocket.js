@@ -817,10 +817,17 @@ export default function registerConnectionHuddleSockets(io, socket) {
       });
       const userIds = members.map((member) => member.user_id).filter((userId) => userId != null);
 
+      const channel = await prisma.channels.findUnique({
+        where: { id: cid },
+        select: { name: true },
+      });
+
       const payload = {
         channelId: cid,
         roomId: rid,
         startedBy: Number(session.started_by),
+        channel_name: channel?.name || `Channel ${cid}`,
+        started_by_username: await getStartedByUsername(session.started_by),
       };
 
       socket.emit("huddleJoined", payload);
@@ -828,7 +835,7 @@ export default function registerConnectionHuddleSockets(io, socket) {
       userIds
         .filter((userId) => Number(userId) !== Number(socket.user?.id))
         .forEach((userId) => {
-        io.to(`user_${userId}`).emit("huddleStarted", payload);
+          io.to(`user_${userId}`).emit("huddleStarted", payload);
         });
     } catch (err) {
       console.error("huddle-started error:", err.message);
