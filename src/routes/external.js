@@ -3,14 +3,24 @@ import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import {
   generateAccessToken,
+  generateRefreshToken,
 } from "../utils/jwt.js";
 import { generateUniqueUsernameFromName } from "../controllers/auth.controller.js";
+import { hashToken } from "../controllers/auth.controller.js";
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
 const EXTERNAL_SECRET = process.env.EXTERNAL_AUTH_SECRET;
 const isProd = process.env.NODE_ENV === "production";
+const accessCookieOptions = {
+  httpOnly: true,
+  secure: isProd,
+  sameSite: isProd ? "none" : "lax",
+  path: "/",
+  maxAge: 7 * 24 * 60 * 60 * 1000,
+};
+const refreshCookieOptions = { ...accessCookieOptions };
 
 /**
  * EXTERNAL CREATE (UPSERT USER)
@@ -176,13 +186,23 @@ router.post("/external-session", async (req, res) => {
       id: user.id,
       email: user.email,
     });
-
-    res.cookie("access_token", accessToken, {
-      httpOnly: true,
-      sameSite: "none",
-      secure: false, // true in prod HTTPS
-      path: "/",
+    const refreshToken = generateRefreshToken({
+      id: user.id,
+      email: user.email,
     });
+    const tokenHash = hashToken(refreshToken);
+
+    await prisma.refresh_tokens.create({
+      data: {
+        user_id: user.id,
+        token_hash: tokenHash,
+        expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        revoked: false,
+      },
+    });
+
+    res.cookie("access_token", accessToken, accessCookieOptions);
+    res.cookie("refresh_token", refreshToken, refreshCookieOptions);
 
     res.cookie("user_id", String(user.id), { sameSite: "none" });
     res.cookie("username", user.name, { sameSite: "none" });
@@ -192,7 +212,7 @@ router.post("/external-session", async (req, res) => {
       sameSite: "none",
     });
 
-    return res.json({ success: true });
+    return res.json({ success: true, accessToken });
   } catch (err) {
     return res.status(401).json({ success: false });
   }
