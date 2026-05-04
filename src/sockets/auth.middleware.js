@@ -3,8 +3,17 @@ import { verifyAccessToken } from "../utils/jwt.js";
 
 export default function socketAuthMiddleware(socket, next) {
   try {
-    const token = socket.handshake.auth?.token;
+    // Preferred: legacy client-sent token (in-memory / localStorage).
+    const tokenFromAuth = socket.handshake.auth?.token;
     const allowGuest = !!socket.handshake.auth?.guest;
+
+    // Safer fallback: HttpOnly cookie.
+    const rawCookieHeader = socket.handshake.headers?.cookie;
+    const parsedCookies = rawCookieHeader ? cookie.parse(rawCookieHeader) : {};
+    const tokenFromCookie =
+      parsedCookies.access_token || parsedCookies.accessToken || null;
+
+    const token = tokenFromAuth || tokenFromCookie;
 
     if (!token) {
       if (!allowGuest) return next(new Error("Unauthorized"));

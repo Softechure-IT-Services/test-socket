@@ -2,8 +2,15 @@ import jwt from "jsonwebtoken";
 import { randomUUID } from "crypto";
 import "dotenv/config";
 
-const ACCESS_TOKEN_SECRET = process.env.JWT_ACCESS_SECRET || "your_jwt_access_secret";
-const REFRESH_TOKEN_SECRET = process.env.JWT_REFRESH_SECRET || "your_jwt_refresh_secret";
+const ACCESS_TOKEN_SECRET = process.env.JWT_ACCESS_SECRET;
+if (!ACCESS_TOKEN_SECRET) {
+  throw new Error("JWT_ACCESS_SECRET is required");
+}
+
+const REFRESH_TOKEN_SECRET = process.env.JWT_REFRESH_SECRET;
+if (!REFRESH_TOKEN_SECRET) {
+  throw new Error("JWT_REFRESH_SECRET is required");
+}
 
 /**
  * Generate a short-lived access token

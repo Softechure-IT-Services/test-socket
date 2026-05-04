@@ -21,6 +21,38 @@ const accessCookieOptions = {
   maxAge: 7 * 24 * 60 * 60 * 1000,
 };
 const refreshCookieOptions = { ...accessCookieOptions };
+// Non-HttpOnly cookies are still transmitted across origins; ensure they are Secure in production.
+const publicCookieOptions = {
+  httpOnly: false,
+  secure: isProd,
+  sameSite: isProd ? "none" : "lax",
+  path: "/",
+  maxAge: accessCookieOptions.maxAge,
+};
+
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:5000",
+  "http://192.168.1.14:3000",
+  "http://192.168.1.15:3000",
+  "http://192.168.0.113:5000",
+  "https://softechat.vercel.app",
+  "https://test-socket-client-steel.vercel.app",
+  process.env.CLIENT_URL,
+].filter(Boolean);
+
+function requireAllowedOrigin(req, res) {
+  const origin = req.headers.origin;
+  if (!origin) {
+    res.status(403).json({ success: false, error: "Forbidden: missing Origin" });
+    return false;
+  }
+  if (!allowedOrigins.includes(origin)) {
+    res.status(403).json({ success: false, error: "Forbidden: invalid Origin" });
+    return false;
+  }
+  return true;
+}
 
 /**
  * EXTERNAL CREATE (UPSERT USER)
@@ -164,6 +196,7 @@ router.post("/external-session", async (req, res) => {
   const { token } = req.body;
 
   try {
+    if (!requireAllowedOrigin(req, res)) return;
     const payload = jwt.verify(token, process.env.EXTERNAL_LOGIN_SECRET);
     const userId = payload.uid;
 
@@ -204,13 +237,11 @@ router.post("/external-session", async (req, res) => {
     res.cookie("access_token", accessToken, accessCookieOptions);
     res.cookie("refresh_token", refreshToken, refreshCookieOptions);
 
-    res.cookie("user_id", String(user.id), { sameSite: "none" });
-    res.cookie("username", user.name, { sameSite: "none" });
-    res.cookie("email", user.email, { sameSite: "none" });
-    res.cookie("avatar_url", user.avatar_url || "", { sameSite: "none" });
-    res.cookie("created_at", user.created_at.toISOString(), {
-      sameSite: "none",
-    });
+    res.cookie("user_id", String(user.id), publicCookieOptions);
+    res.cookie("username", user.name, publicCookieOptions);
+    res.cookie("email", user.email, publicCookieOptions);
+    res.cookie("avatar_url", user.avatar_url || "", publicCookieOptions);
+    res.cookie("created_at", user.created_at.toISOString(), publicCookieOptions);
 
     return res.json({ success: true, accessToken });
   } catch (err) {

@@ -251,12 +251,23 @@ export const addThreadReply = async (req, res) => {
     if (io) {
       io.to(`channel_${parentMsg.channel_id}`).emit("threadReplyAdded", broadcastData);
       
-      const cm = await prisma.channel_members.findMany({ where: { channel_id: parentMsg.channel_id }, select: { user_id: true } });
-      const chnl = await prisma.channels.findUnique({ where: { id: parentMsg.channel_id }, select: { name: true, is_dm: true } });
-      cm
-        .filter(({ user_id }) => Number(user_id) !== Number(userId))
-        .forEach(({ user_id }) => {
-        io.to(`user_${user_id}`).emit("newThreadNotification", {
+      let notifyUserIds = [];
+      const chnl = await prisma.channels.findUnique({ where: { id: parentMsg.channel_id }, select: { name: true, is_dm: true, is_private: true } });
+      
+      if (chnl?.is_private) {
+        const cm = await prisma.channel_members.findMany({ where: { channel_id: parentMsg.channel_id }, select: { user_id: true } });
+        notifyUserIds = cm.map(m => m.user_id);
+      } else {
+        const leftUsers = await prisma.channel_left.findMany({ where: { channel_id: parentMsg.channel_id }, select: { user_id: true } });
+        const leftIds = new Set(leftUsers.map(u => u.user_id));
+        const allUsers = await prisma.users.findMany({ select: { id: true } });
+        notifyUserIds = allUsers.map(u => u.id).filter(id => !leftIds.has(id));
+      }
+
+      notifyUserIds
+        .filter((uid) => Number(uid) !== Number(userId))
+        .forEach((uid) => {
+        io.to(`user_${uid}`).emit("newThreadNotification", {
           channel_id: parentMsg.channel_id,
           channel_name: chnl?.name,
           is_dm: chnl?.is_dm === true,

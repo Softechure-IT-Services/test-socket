@@ -22,6 +22,31 @@ const accessCookieOptions = {
 };
 const refreshCookieOptions = { ...accessCookieOptions };
 
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:5000",
+  "http://192.168.1.14:3000",
+  "http://192.168.1.15:3000",
+  "http://192.168.0.113:5000",
+  "https://softechat.vercel.app",
+  process.env.CLIENT_URL,
+].filter(Boolean);
+
+function requireAllowedOrigin(req, res) {
+  // CSRF protection for cookie-based endpoints: require browser origin match.
+  // (Non-browser requests may omit Origin; they will be rejected.)
+  const origin = req.headers.origin;
+  if (!origin) {
+    res.status(403).json({ error: "Forbidden: missing Origin" });
+    return false;
+  }
+  if (!allowedOrigins.includes(origin)) {
+    res.status(403).json({ error: "Forbidden: invalid Origin" });
+    return false;
+  }
+  return true;
+}
+
 function extractToken(req) {
   // 1. From cookie
   if (req.cookies?.refresh_token) {
@@ -71,6 +96,7 @@ router.post("/login", async (req, res) => {
 
 router.post("/refresh", async (req, res) => {
   try {
+    if (!requireAllowedOrigin(req, res)) return;
     const token = extractToken(req);
     if (!token) {
       return res.status(401).json({ error: "No refresh token provided" });
@@ -99,6 +125,7 @@ router.post("/refresh", async (req, res) => {
 
 router.post("/logout", async (req, res) => {
   try {
+    if (!requireAllowedOrigin(req, res)) return;
     const token = req.cookies?.refresh_token;
     await logoutUser(token);
     res.clearCookie("access_token");

@@ -8,3 +8,4 @@ export { default as uploadRoutes } from "./upload.js";
 export { default as dmRoutes } from "./dm.js";
 export { default as profileRoutes } from "./profile.js";
 export { default as huddleRoutes } from "./huddle.js";
+export { default as draftRoutes } from "./draft.js";

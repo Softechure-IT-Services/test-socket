@@ -133,6 +133,7 @@ model users {
   bio     String?  @db.Text
   notification_preferences String? @db.Text
   privacy_preferences      String? @db.Text
+  drafts                   drafts[]
 }
 
 model password_reset_tokens {
@@ -160,4 +161,20 @@ model huddleSession {
   @@index([channel_id], map: "idx_huddle_channel")
   @@index([started_by], map: "idx_huddle_started_by")
   @@map("huddle_sessions")
+}
+
+model drafts {
+  id          Int      @id @default(autoincrement())
+  user_id     Int
+  entity_type String   @db.VarChar(50) // 'channel' or 'thread'
+  entity_id   Int
+  content     String?  @db.LongText
+  files       String?  @db.LongText
+  created_at  DateTime @default(now()) @db.DateTime(0)
+  updated_at  DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  users       users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, entity_type, entity_id], map: "unique_draft_context")
+  @@index([user_id])
 }

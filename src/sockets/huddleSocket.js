@@ -277,6 +277,13 @@ async function isChannelMember(channelId, userId) {
     return false;
   }
 
+  const channel = await prisma.channels.findUnique({
+    where: { id: numericChannelId },
+    select: { is_private: true },
+  });
+  if (!channel) return false;
+  if (!channel.is_private) return true;
+
   const membership = await prisma.channel_members.findFirst({
     where: {
       channel_id: numericChannelId,
