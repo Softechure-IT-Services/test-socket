@@ -129,29 +129,48 @@ export const getChannelPinnedMessages = async (req, res) => {
 export const createOrCheckChannel = async (req, res) => {
   const { name, is_private, isPrivate, description, create, memberIds } = req.body;
   const userId = req.user.id;
+  const MAX_CHANNEL_NAME_LENGTH = 30;
 
   const actualIsPrivate = isPrivate !== undefined ? isPrivate : is_private;
 
   if (create === false) {
-    if (!name) return res.json({ data: { available: false } });
+    if (!name || typeof name !== "string" || !name.trim()) {
+      return res.json({ data: { available: false }, error: "Channel name is required" });
+    }
+
+    if (name.length > MAX_CHANNEL_NAME_LENGTH) {
+      return res.json({
+        data: { available: false },
+        error: `Channel name must be ${MAX_CHANNEL_NAME_LENGTH} characters or less`,
+      });
+    }
+
     try {
       const existing = await prisma.channels.findUnique({
         where: { name },
       });
-      return res.json({ data: { available: !existing } });
+      return res.json({ data: { available: !existing }, error: existing ? "Channel name is already taken" : null });
     } catch (err) {
       return res.status(500).json({ error: "Failed to check name" });
     }
   }
 
   try {
+    if (!name || typeof name !== "string" || !name.trim()) {
+      return res.status(400).json({ error: "Channel name is required" });
+    }
+
+    if (name.length > MAX_CHANNEL_NAME_LENGTH) {
+      return res.status(400).json({ error: `Channel name must be ${MAX_CHANNEL_NAME_LENGTH} characters or less` });
+    }
+
     const additionalMembers = (memberIds || [])
       .filter((id) => Number(id) !== Number(userId))
       .map((id) => ({ user_id: Number(id) }));
 
     const channel = await prisma.channels.create({
       data: {
-        name,
+        name: name.replace(/\s+/g, " ").trim(),
         is_private: !!actualIsPrivate,
         description,
         created_by: userId,

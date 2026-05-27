@@ -71,6 +71,153 @@ export const generateUniqueUsernameFromName = async (name, excludeUserId = null)
   return candidate;
 };
 
+const EXTERNAL_USER_DETAILS_URL =
+  process.env.EXTERNAL_USER_DETAILS_URL ||
+  "https://reporting.softechure.com/api/chatuser?access_token=eakXoguVKH";
+
+export const fetchExternalUserDetails = async (externalAuthToken) => {
+  if (!externalAuthToken || typeof externalAuthToken !== "string") {
+    throw { status: 400, message: "Missing external auth token" };
+  }
+
+  const timeoutMs = parseInt(process.env.EXTERNAL_USER_DETAILS_TIMEOUT_MS || "10000", 10);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const url = new URL(EXTERNAL_USER_DETAILS_URL);
+    url.searchParams.set("access_token", externalAuthToken);
+
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+      },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw { status: response.status, message: "Failed to fetch external user details" };
+    }
+
+    const payload = await response.json();
+    return payload;
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw { status: 504, message: "External user service timed out" };
+    }
+    throw { status: 502, message: "External user service unavailable", details: error.message || error };
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+export const findOrCreateExternalUser = async ({ external_id, auth_token, externalAuthToken }) => {
+  const token = auth_token || externalAuthToken;
+  if (!token) {
+    throw { status: 400, message: "Missing auth token" };
+  }
+
+  // First try the local auth_token match, because the raw token itself may already belong to a stored user.
+  let user = await prisma.users.findFirst({
+    where: { auth_token: token },
+  });
+
+  if (!user && external_id) {
+    user = await prisma.users.findUnique({
+      where: { external_id },
+    });
+  }
+
+  if (user) {
+    const updateData = {};
+    if (user.auth_token !== token) updateData.auth_token = token;
+    if (!user.external_id && external_id) updateData.external_id = String(external_id);
+
+    if (Object.keys(updateData).length > 0) {
+      user = await prisma.users.update({
+        where: { id: user.id },
+        data: updateData,
+      });
+    }
+
+    return user;
+  }
+
+  let externalDetails = null;
+  let source = null;
+
+  if (!external_id) {
+    externalDetails = await fetchExternalUserDetails(token);
+    if (!externalDetails || (externalDetails.status !== true && externalDetails.success !== true)) {
+      return null;
+    }
+
+    source = externalDetails.data || externalDetails.user || externalDetails;
+    external_id = source.external_id || source.id || external_id;
+  }
+
+  if (external_id) {
+    user = await prisma.users.findUnique({
+      where: { external_id },
+    });
+  }
+
+  if (!user && source?.email) {
+    user = await prisma.users.findUnique({
+      where: { email: source.email },
+    });
+  }
+
+  if (user) {
+    const updateData = {};
+    if (user.auth_token !== token) updateData.auth_token = token;
+    if (!user.external_id && external_id) updateData.external_id = String(external_id);
+
+    if (Object.keys(updateData).length > 0) {
+      user = await prisma.users.update({
+        where: { id: user.id },
+        data: updateData,
+      });
+    }
+
+    return user;
+  }
+
+  const details = externalDetails || (await fetchExternalUserDetails(token));
+  if (!details || (details.status !== true && details.success !== true)) {
+    return null;
+  }
+
+  source = details.data || details.user || details;
+  const remoteExternalId = external_id || source.external_id || source.id;
+  const name = source.name || `${source.first_name || ""} ${source.last_name || ""}`.trim();
+  const email = source.email;
+  const avatar_url = source.avatar_url || source.avatarUrl || "";
+
+  if (!name || !email) {
+    return null;
+  }
+
+  const generatedUsername = await generateUniqueUsernameFromName(name);
+  const randomPassword = crypto.randomBytes(32).toString("hex");
+  const passwordHash = await bcrypt.hash(randomPassword, 10);
+
+  return prisma.users.create({
+    data: {
+      external_id: remoteExternalId ? String(remoteExternalId) : null,
+      name,
+      username: generatedUsername,
+      email,
+      avatar_url,
+      auth_token: token,
+      password: passwordHash,
+      is_online: false,
+      last_seen: new Date(),
+    },
+  });
+};
+
 /**
  * Register a new user
  */

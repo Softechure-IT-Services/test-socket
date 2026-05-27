@@ -5,7 +5,10 @@ import {
   generateAccessToken,
   generateRefreshToken,
 } from "../utils/jwt.js";
-import { generateUniqueUsernameFromName } from "../controllers/auth.controller.js";
+import {
+  generateUniqueUsernameFromName,
+  findOrCreateExternalUser,
+} from "../controllers/auth.controller.js";
 import { hashToken } from "../controllers/auth.controller.js";
 
 const router = express.Router();
@@ -126,14 +129,8 @@ router.post("/external-create", async (req, res) => {
  * EXTERNAL LOGIN
  */
 router.post("/external-login", async (req, res) => {
-  if (!req.body || typeof req.body !== "object") {
-    return res
-      .status(400)
-      .json({ authenticated: false, error: "Invalid or missing JSON body" });
-  }
-
   const authHeader = req.headers["authorization"];
-  const { external_id } = req.body;
+  const { external_id } = req.body || {};
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res
@@ -141,37 +138,23 @@ router.post("/external-login", async (req, res) => {
       .json({ authenticated: false, error: "Missing auth token" });
   }
 
-  if (!external_id) {
-    return res
-      .status(400)
-      .json({ authenticated: false, error: "Missing external_id" });
-  }
-
   const authToken = authHeader.split(" ")[1];
 
   try {
-    const user = await prisma.users.findUnique({
-      where: { external_id },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        auth_token: true,
-      },
+    const user = await findOrCreateExternalUser({
+      external_id,
+      auth_token: authToken,
+      externalAuthToken: authToken,
     });
 
     if (!user) {
       return res.json({ authenticated: false });
     }
 
-    if (user.auth_token !== authToken) {
-      return res.json({ authenticated: false });
-    }
-
     const loginToken = jwt.sign(
       {
         uid: user.id,
-        ext: external_id,
+        ext: user.external_id,
       },
       process.env.EXTERNAL_LOGIN_SECRET,
       { expiresIn: "50m" }
@@ -185,6 +168,11 @@ router.post("/external-login", async (req, res) => {
     });
   } catch (err) {
     console.error("External login error:", err);
+
+    if (err && typeof err === "object" && err.status && err.status >= 400 && err.status < 600) {
+      return res.status(err.status).json({ authenticated: false, error: err.message || "External login failed" });
+    }
+
     return res.status(500).json({ authenticated: false });
   }
 });
@@ -195,34 +183,54 @@ router.post("/external-login", async (req, res) => {
 router.post("/external-session", async (req, res) => {
   const { token } = req.body;
 
+  if (!token) {
+    return res.status(400).json({ success: false, error: "Missing token" });
+  }
+
   try {
     if (!requireAllowedOrigin(req, res)) return;
-    const payload = jwt.verify(token, process.env.EXTERNAL_LOGIN_SECRET);
-    const userId = payload.uid;
 
-    const user = await prisma.users.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        avatar_url: true,
-        created_at: true,
-      },
-    });
+    let user;
+    try {
+      const payload = jwt.verify(token, process.env.EXTERNAL_LOGIN_SECRET);
+      const userId = payload.uid;
 
-    if (!user) {
-      return res.status(500).json({ success: false });
+      user = await prisma.users.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          name: true,
+          username: true,
+          email: true,
+          avatar_url: true,
+          created_at: true,
+        },
+      });
+
+      if (!user) {
+        throw new Error("UserNotFound");
+      }
+    } catch (verifyErr) {
+      const isTokenError =
+        verifyErr.name === "JsonWebTokenError" ||
+        verifyErr.name === "TokenExpiredError" ||
+        verifyErr.message === "UserNotFound";
+
+      if (!isTokenError) {
+        throw verifyErr;
+      }
+
+      user = await findOrCreateExternalUser({
+        externalAuthToken: token,
+      });
+
+      if (!user) {
+        return res.status(401).json({ success: false });
+      }
     }
 
-    const accessToken = generateAccessToken({
-      id: user.id,
-      email: user.email,
-    });
-    const refreshToken = generateRefreshToken({
-      id: user.id,
-      email: user.email,
-    });
+    const accessToken = generateAccessToken(user);
+    const refreshToken = generateRefreshToken(user);
     const tokenHash = hashToken(refreshToken);
 
     await prisma.refresh_tokens.create({
@@ -245,6 +253,7 @@ router.post("/external-session", async (req, res) => {
 
     return res.json({ success: true, accessToken });
   } catch (err) {
+    console.error("External session error:", err.message || err);
     return res.status(401).json({ success: false });
   }
 });
