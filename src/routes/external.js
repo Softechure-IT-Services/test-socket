@@ -24,7 +24,7 @@ const accessCookieOptions = {
   maxAge: 7 * 24 * 60 * 60 * 1000,
 };
 const refreshCookieOptions = { ...accessCookieOptions };
-// Non-HttpOnly cookies are still transmitted across origins; ensure they are Secure in production.
+// Non-HttpOnly cookies are still transmitted across origins; only use SameSite=None in production.
 const publicCookieOptions = {
   httpOnly: false,
   secure: isProd,

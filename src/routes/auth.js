@@ -84,8 +84,16 @@ router.post("/login", async (req, res) => {
 
     res.cookie("access_token", accessToken, accessCookieOptions);
     res.cookie("refresh_token", refreshToken, refreshCookieOptions);
-    res.cookie("user_id", String(user.id), { sameSite: isProd ? "none" : "lax", secure: isProd, httpOnly: false });
-    res.cookie("username", user.name || "", { sameSite: isProd ? "none" : "lax", secure: isProd, httpOnly: false });
+    res.cookie("user_id", String(user.id), {
+      sameSite: isProd ? "none" : "lax",
+      secure: isProd,
+      httpOnly: false,
+    });
+    res.cookie("username", user.name || "", {
+      sameSite: isProd ? "none" : "lax",
+      secure: isProd,
+      httpOnly: false,
+    });
 
     res.json({ message: "Login successful", user: { id: user.id, name: user.name, email: user.email, access_token: accessToken, avatar_url: user.avatar_url } });
   } catch (err) {

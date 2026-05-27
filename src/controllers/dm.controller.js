@@ -16,11 +16,17 @@ export const createOrGetDM = async (req, res) => {
     const existingDM = await prisma.channels.findFirst({
       where: {
         is_dm: true,
-        channel_members: {
-          every: {
-            user_id: { in: [userId, otherUserId] },
+        AND: [
+          { channel_members: { some: { user_id: userId } } },
+          { channel_members: { some: { user_id: otherUserId } } },
+          {
+            channel_members: {
+              every: {
+                user_id: { in: [userId, otherUserId] },
+              },
+            },
           },
-        },
+        ],
       },
       select: { id: true },
     });
