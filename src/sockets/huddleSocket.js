@@ -282,7 +282,17 @@ async function isChannelMember(channelId, userId) {
     select: { is_private: true },
   });
   if (!channel) return false;
-  if (!channel.is_private) return true;
+  if (!channel.is_private) {
+    const hasLeft = await prisma.channel_left.findUnique({
+      where: {
+        channel_id_user_id: {
+          channel_id: numericChannelId,
+          user_id: numericUserId,
+        },
+      },
+    });
+    return !hasLeft;
+  }
 
   const membership = await prisma.channel_members.findFirst({
     where: {
@@ -786,14 +796,8 @@ export default function registerConnectionHuddleSockets(io, socket) {
     let rid = roomId;
 
     try {
-      const membership = await prisma.channel_members.findFirst({
-        where: {
-          channel_id: cid,
-          user_id: Number(socket.user?.id),
-        },
-        select: { user_id: true },
-      });
-      if (!membership) {
+      const isMember = await isChannelMember(cid, socket.user?.id);
+      if (!isMember) {
         socket.emit("huddle-error", { error: "Not allowed to start huddle for this channel" });
         return;
       }

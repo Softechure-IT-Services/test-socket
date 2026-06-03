@@ -199,18 +199,33 @@ router.post("/channel/:channelId/start", authenticateToken, async (req, res) => 
     // Ensure channel exists
     const channel = await prisma.channels.findUnique({
       where: { id: channelId },
-      select: { id: true, name: true },
+      select: { id: true, name: true, is_private: true },
     });
     if (!channel) {
       return res.status(404).json({ error: "Channel not found" });
     }
 
     // Ensure starter is a channel member
-    const starterMembership = await prisma.channel_members.findFirst({
-      where: { channel_id: channelId, user_id: startedBy },
-      select: { user_id: true },
-    });
-    if (!starterMembership) {
+    let isMember = false;
+    if (channel.is_private) {
+      const starterMembership = await prisma.channel_members.findFirst({
+        where: { channel_id: channelId, user_id: startedBy },
+        select: { user_id: true },
+      });
+      isMember = !!starterMembership;
+    } else {
+      const hasLeft = await prisma.channel_left.findUnique({
+        where: {
+          channel_id_user_id: {
+            channel_id: channelId,
+            user_id: startedBy,
+          },
+        },
+      });
+      isMember = !hasLeft;
+    }
+
+    if (!isMember) {
       return res.status(403).json({ error: "You are not a member of this channel" });
     }
 
